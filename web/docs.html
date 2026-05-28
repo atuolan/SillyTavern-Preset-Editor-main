@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>预设文档中心</title>
+    <style>
+      :root {
+        --bg: #f6f2ea;
+        --panel: #fff;
+        --line: #d9ccbb;
+        --text: #2b2520;
+        --muted: #7f6d5c;
+        --brand: #b0562d;
+        --brand-soft: #fff1e7;
+        --radius: 14px;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --ui: "Trebuchet MS", "Avenir Next", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: var(--ui);
+        color: var(--text);
+        background:
+          linear-gradient(140deg, rgba(176, 86, 45, 0.08), transparent 45%),
+          linear-gradient(320deg, rgba(32, 117, 79, 0.06), transparent 55%),
+          var(--bg);
+      }
+
+      .wrap {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 18px 14px 28px;
+      }
+
+      .top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .title {
+        font-size: 24px;
+        font-weight: 800;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .btn {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 10px;
+        padding: 8px 10px;
+        color: var(--text);
+        text-decoration: none;
+        font-weight: 700;
+      }
+
+      .intro {
+        padding: 10px 12px;
+        margin-bottom: 12px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+
+      .intro p {
+        margin: 0;
+        line-height: 1.55;
+      }
+
+      .docSection {
+        margin-bottom: 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        overflow: hidden;
+      }
+
+      .docSection summary {
+        list-style: none;
+        cursor: pointer;
+        padding: 12px 14px;
+        font-size: 17px;
+        font-weight: 800;
+        background: #fcfaf6;
+        border-bottom: 1px solid transparent;
+      }
+
+      .docSection summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .docSection[open] summary {
+        border-bottom-color: var(--line);
+        background: var(--brand-soft);
+        color: var(--brand);
+      }
+
+      .sectionBody {
+        padding: 12px 14px;
+      }
+
+      h3 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+
+      p,
+      li {
+        line-height: 1.55;
+      }
+
+      ol,
+      ul {
+        margin: 0 0 10px;
+        padding-left: 20px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        border: 1px solid var(--line);
+        padding: 7px 8px;
+        vertical-align: top;
+      }
+
+      th {
+        background: #fcfaf6;
+        text-align: left;
+      }
+
+      code {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+
+      .sourceList a {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--brand);
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <div class="title">预设文档中心</div>
+          <div class="muted">v0.2.3 · 分类查看：项目使用、预设变量、正则配置、参考资料</div>
+        </div>
+        <a class="btn" href="/web/index.html">返回主页面</a>
+      </div>
+
+      <div class="intro">
+        <p>
+          文档页为辅助功能，不影响主编辑流程。默认仅展开“项目使用与介绍”，其余分类按需展开，避免一次性加载过多内容导致阅读和性能负担。
+        </p>
+      </div>
+
+      <details class="docSection" open>
+        <summary>项目使用与介绍</summary>
+        <div class="sectionBody">
+          <h3>定位</h3>
+          <p>本工具用于导入酒馆（SillyTavern）预设，进行可视化编辑，并按规则导出提示词、预设 JSON 与正则脚本。</p>
+
+          <h3>基础操作流程</h3>
+          <ol>
+            <li>在主页面导入酒馆预设 JSON，或点击“新建工程”。</li>
+            <li>按需新增配置组、修改配置组ID，或在双重确认后删除配置组。</li>
+            <li>在“提示词”页进行增删改、启用控制和顺序调整。</li>
+            <li>在“正则”页编辑脚本并勾选要导出的脚本。</li>
+            <li>在“API 配置”页按需修改参数（默认不会写入导出 JSON）。</li>
+            <li>导出时默认选 `TXT`；需要回酒馆时改选 `JSON`。</li>
+          </ol>
+
+          <h3>导出规则速览</h3>
+          <ul>
+            <li>`TXT`：仅提示词内容，默认不携带正则与 API 配置。</li>
+            <li>`JSON`：酒馆风格预设，可选“全部提示词 / 仅启用提示词”。</li>
+            <li>勾选“JSON 携带正则”时，仅会打包正则页中已选中的脚本。</li>
+            <li>正则独立导出始终为“一脚本一文件”的 JSON 结构。</li>
+          </ul>
+        </div>
+      </details>
+
+      <details class="docSection">
+        <summary>预设变量（酒馆宏）</summary>
+        <div class="sectionBody">
+          <p class="muted">以下是常见宏示例。可用宏集合会因上下文和版本变化，请以官方文档为准。</p>
+          <table>
+            <thead>
+              <tr>
+                <th>变量</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>{{char}}</code></td>
+                <td>当前角色名</td>
+              </tr>
+              <tr>
+                <td><code>{{user}}</code></td>
+                <td>当前用户名</td>
+              </tr>
+              <tr>
+                <td><code>{{group}}</code></td>
+                <td>群聊名称（群聊上下文）</td>
+              </tr>
+              <tr>
+                <td><code>{{lastMessage}}</code></td>
+                <td>最近一条消息文本</td>
+              </tr>
+              <tr>
+                <td><code>{{lastUserMessage}}</code></td>
+                <td>最近一条用户消息文本</td>
+              </tr>
+              <tr>
+                <td><code>{{time}}</code></td>
+                <td>当前时间</td>
+              </tr>
+              <tr>
+                <td><code>{{date}}</code></td>
+                <td>当前日期</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </details>
+
+      <details class="docSection">
+        <summary>正则配置说明</summary>
+        <div class="sectionBody">
+          <table>
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code>id</code></td>
+                <td>脚本唯一标识</td>
+              </tr>
+              <tr>
+                <td><code>scriptName</code></td>
+                <td>脚本显示名</td>
+              </tr>
+              <tr>
+                <td><code>findRegex</code></td>
+                <td>匹配表达式（通常写为 <code>/pattern/flags</code>）</td>
+              </tr>
+              <tr>
+                <td><code>replaceString</code></td>
+                <td>替换文本</td>
+              </tr>
+              <tr>
+                <td><code>trimStrings</code></td>
+                <td>替换前后额外裁剪的字符串数组</td>
+              </tr>
+              <tr>
+                <td><code>placement</code></td>
+                <td>执行位置数组（酒馆内部枚举值）</td>
+              </tr>
+              <tr>
+                <td><code>disabled</code></td>
+                <td>是否禁用</td>
+              </tr>
+              <tr>
+                <td><code>markdownOnly</code></td>
+                <td>仅在 Markdown 文本场景执行</td>
+              </tr>
+              <tr>
+                <td><code>promptOnly</code></td>
+                <td>仅在提示词拼装阶段执行</td>
+              </tr>
+              <tr>
+                <td><code>runOnEdit</code></td>
+                <td>编辑阶段即时执行</td>
+              </tr>
+              <tr>
+                <td><code>minDepth</code> / <code>maxDepth</code></td>
+                <td>按对话层数限制生效范围（可为 <code>null</code>）</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="muted">本工具导出正则时保持“每个脚本一个 JSON 文件”，不做额外包裹。</p>
+        </div>
+      </details>
+
+      <details class="docSection sourceList">
+        <summary>参考资料</summary>
+        <div class="sectionBody">
+          <a href="https://docs.sillytavern.app/usage/st-script/#macros-replacement" target="_blank" rel="noopener noreferrer">
+            SillyTavern 文档 - ST Script / 宏替换
+          </a>
+          <a href="https://docs.sillytavern.app/usage/core-concepts/characterdesign/#replace-macros-in-descriptions" target="_blank" rel="noopener noreferrer">
+            SillyTavern 文档 - 角色设计 / 描述中的宏替换
+          </a>
+          <a href="https://docs.sillytavern.app/usage/core-concepts/worldinfo/#replace-macros-in-entries" target="_blank" rel="noopener noreferrer">
+            SillyTavern 文档 - 世界书 / 条目中的宏替换
+          </a>
+          <a href="https://docs.sillytavern.app/usage/core-concepts/promptdesign/" target="_blank" rel="noopener noreferrer">
+            SillyTavern 文档 - 提示词设计
+          </a>
+          <a href="https://docs.sillytavern.app/usage/core-concepts/regex/" target="_blank" rel="noopener noreferrer">
+            SillyTavern 文档 - 正则
+          </a>
+          <a href="https://docs.sillytavern.app/usage/core-concepts/advancedformatting/" target="_blank" rel="noopener noreferrer">
+            SillyTavern 文档 - 高级格式
+          </a>
+        </div>
+      </details>
+    </div>
+  </body>
+</html>

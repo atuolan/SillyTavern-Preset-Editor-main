@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>酒馆预设编辑器</title>
+    <link rel="stylesheet" href="/web/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand__titleWrap">
+          <div class="brand__title">酒馆预设编辑器</div>
+          <span id="appVersion" class="versionTag">v0.2.3</span>
+        </div>
+        <div class="brand__sub">预设、正则、API 配置分离编辑</div>
+      </div>
+
+      <nav class="tabs">
+        <button id="tabPromptsBtn" class="tab tab--active" type="button">提示词</button>
+        <button id="tabRegexBtn" class="tab" type="button">正则</button>
+        <button id="tabApiBtn" class="tab" type="button">API 配置</button>
+      </nav>
+
+      <div class="topActions">
+        <label class="btn">
+          导入预设/工程（JSON）
+          <input id="fileInput" type="file" accept=".json,application/json" hidden />
+        </label>
+        <button id="newProjectBtn" class="btn btn--secondary" type="button">新建工程</button>
+        <button id="saveProjectBtn" class="btn btn--secondary" type="button" disabled>下载工程</button>
+        <button id="docsBtn" class="btn btn--secondary" type="button">文档中心</button>
+        <span id="fileBadge" class="badge">未加载</span>
+      </div>
+    </header>
+
+    <main class="main">
+      <section id="promptsView" class="view view--active">
+        <div class="layout layout--three">
+          <aside class="panel">
+            <div class="panel__header">
+              <div class="panel__title">提示词列表</div>
+              <div class="panel__hint">左键选择编辑，勾选控制启用</div>
+            </div>
+            <div class="panel__tools">
+              <select id="promptProfileSelect" class="ctrl" disabled></select>
+              <input id="promptFilterInput" class="ctrl" type="text" placeholder="搜索标题 / 标识（ID）" disabled />
+            </div>
+            <div class="panel__tools panel__tools--row">
+              <button id="addProfileBtn" class="btn btn--small" type="button" disabled>新增配置组</button>
+              <button id="editProfileIdBtn" class="btn btn--small btn--secondary" type="button" disabled>修改组ID</button>
+              <button id="delProfileBtn" class="btn btn--small btn--danger" type="button" disabled>删除配置组</button>
+            </div>
+            <div class="panel__tools panel__tools--row">
+              <button id="addPromptBtn" class="btn btn--small" type="button" disabled>新增</button>
+              <button id="dupPromptBtn" class="btn btn--small btn--secondary" type="button" disabled>复制</button>
+              <button id="delPromptBtn" class="btn btn--small btn--danger" type="button" disabled>删除</button>
+            </div>
+            <div id="promptList" class="list"></div>
+          </aside>
+
+          <section class="panel">
+            <div class="panel__header">
+              <div class="panel__title">提示词编辑</div>
+              <div id="promptEditorHint" class="panel__hint">选择左侧项后编辑</div>
+            </div>
+            <div id="promptEditor" class="editor"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel__header">
+              <div class="panel__title">导出</div>
+              <div class="panel__hint">默认 TXT（纯文本），不包含正则与 API 配置</div>
+            </div>
+            <div class="export">
+              <div class="panel__tools">
+                <select id="exportFormatSelect" class="ctrl" disabled>
+                  <option value="txt">TXT（纯文本）</option>
+                  <option value="json">JSON（酒馆风格）</option>
+                </select>
+                <select id="promptModeSelect" class="ctrl" disabled>
+                  <option value="enabled">仅启用提示词</option>
+                  <option value="all">全部提示词</option>
+                </select>
+                <label class="check">
+                  <input id="includeEmptyCheck" type="checkbox" disabled />
+                  TXT 包含空白块
+                </label>
+              </div>
+
+              <div id="jsonOptions" class="jsonOptions" hidden>
+                <label class="check">
+                  <input id="includeRegexInJsonCheck" type="checkbox" disabled />
+                  JSON 携带正则（仅已选中项）
+                </label>
+                <label class="check">
+                  <input id="includeApiInJsonCheck" type="checkbox" disabled />
+                  JSON 携带 API 配置
+                </label>
+                <div id="jsonInfo" class="info"></div>
+              </div>
+
+              <div class="panel__tools panel__tools--row">
+                <button id="copyExportBtn" class="btn btn--small" type="button" disabled>复制</button>
+                <button id="downloadExportBtn" class="btn btn--small btn--secondary" type="button" disabled>下载</button>
+              </div>
+              <textarea id="exportOutput" class="textarea" readonly></textarea>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="regexView" class="view">
+        <div class="layout layout--two">
+          <aside class="panel">
+            <div class="panel__header">
+              <div class="panel__title">正则列表</div>
+              <div class="panel__hint">行点击编辑，复选框用于导出选择</div>
+            </div>
+            <div class="panel__tools">
+              <input id="regexFilterInput" class="ctrl" type="text" placeholder="搜索脚本名 / 标识（ID）" disabled />
+            </div>
+            <div class="panel__tools panel__tools--row">
+              <button id="addRegexBtn" class="btn btn--small" type="button" disabled>新增</button>
+              <button id="dupRegexBtn" class="btn btn--small btn--secondary" type="button" disabled>复制</button>
+              <button id="delRegexBtn" class="btn btn--small btn--danger" type="button" disabled>删除</button>
+            </div>
+            <div class="panel__tools panel__tools--row">
+              <button id="selectAllRegexBtn" class="btn btn--small btn--secondary" type="button" disabled>全选导出</button>
+              <button id="clearRegexSelectBtn" class="btn btn--small btn--secondary" type="button" disabled>清空导出</button>
+            </div>
+            <div id="regexList" class="list"></div>
+          </aside>
+
+          <section class="panel">
+            <div class="panel__header">
+              <div class="panel__title">正则编辑</div>
+              <div id="regexEditorHint" class="panel__hint">选择左侧项后编辑</div>
+            </div>
+            <div class="panel__tools panel__tools--row">
+              <button id="exportRegexBtn" class="btn btn--small" type="button" disabled>导出选中正则（每脚本一个文件）</button>
+              <span id="regexExportInfo" class="info"></span>
+            </div>
+            <div id="regexEditor" class="editor"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="apiView" class="view">
+        <div class="layout layout--single">
+          <section class="panel">
+            <div class="panel__header">
+              <div class="panel__title">API 配置编辑</div>
+              <div class="panel__hint">仅在 JSON 导出勾选“携带 API 配置”时生效</div>
+            </div>
+            <div class="panel__tools">
+              <input id="apiFilterInput" class="ctrl" type="text" placeholder="搜索配置键" disabled />
+            </div>
+            <div class="panel__tools panel__tools--row">
+              <button id="addApiSettingBtn" class="btn btn--small" type="button" disabled>新增配置</button>
+            </div>
+            <div id="apiList" class="apiList"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/web/app.js"></script>
+  </body>
+</html>

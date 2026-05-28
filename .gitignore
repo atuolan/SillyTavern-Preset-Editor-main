@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.*
+.vscode/
+.idea/
+
+# local-only docs and sample presets
+PROJECT.md
+docs/report-*.md
+参考预设/
