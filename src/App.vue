@@ -100,6 +100,9 @@ const doc = ref(null);
 const currentLocalProjectId = ref(null);
 const localProjects = ref([]);
 const isLocalProjectBusy = ref(false);
+const autoSaveStatus = ref("idle"); // idle | pending | saving | saved | error
+const autoSaveTimer = ref(null);
+const suppressAutoSave = ref(false);
 
 const selectedProfileId = ref(null);
 const selectedPromptId = ref(null);
@@ -125,6 +128,7 @@ const copySuccess = ref(false);
 const LOCAL_PROJECT_DB_NAME = "sillytavern-preset-editor";
 const LOCAL_PROJECT_DB_VERSION = 1;
 const LOCAL_PROJECT_STORE = "projects";
+const AUTO_SAVE_DELAY_MS = 800;
 
 // 計算屬性
 const isDocLoaded = computed(() => !!doc.value);
@@ -443,8 +447,61 @@ async function refreshLocalProjects() {
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+function getAutoSaveStatusLabel() {
+  if (autoSaveStatus.value === "pending") return "等待自動保存";
+  if (autoSaveStatus.value === "saving") return "自動保存中";
+  if (autoSaveStatus.value === "saved") return "已自動保存";
+  if (autoSaveStatus.value === "error") return "自動保存失敗";
+  return "自動保存已啟用";
+}
+
+async function autoSaveProjectToLocalLibrary() {
+  if (!doc.value || isLocalProjectBusy.value || suppressAutoSave.value) return;
+  autoSaveStatus.value = "saving";
+  try {
+    const storedDoc = getCurrentDocForStorage();
+    const now = Date.now();
+    const id = currentLocalProjectId.value || makeLocalProjectId();
+    const title = storedDoc.title || "未命名工程";
+    const nextFileName = fileName.value || `${title}.project.json`;
+    await withLocalProjectStore("readwrite", store => {
+      store.put({
+        id,
+        title,
+        fileName: nextFileName,
+        doc: storedDoc,
+        createdAt: now,
+        updatedAt: now
+      });
+    });
+    currentLocalProjectId.value = id;
+    fileName.value = nextFileName;
+    await refreshLocalProjects();
+    autoSaveStatus.value = "saved";
+  } catch (err) {
+    console.error("自動保存到本機工程庫失敗", err);
+    autoSaveStatus.value = "error";
+  }
+}
+
+function scheduleAutoSave() {
+  if (!doc.value || suppressAutoSave.value) return;
+  autoSaveStatus.value = "pending";
+  if (autoSaveTimer.value) window.clearTimeout(autoSaveTimer.value);
+  autoSaveTimer.value = window.setTimeout(() => {
+    autoSaveTimer.value = null;
+    autoSaveProjectToLocalLibrary();
+  }, AUTO_SAVE_DELAY_MS);
+}
+
 // 核心操作方法
 function setLoadedDoc(newDoc, name) {
+  suppressAutoSave.value = true;
+  if (autoSaveTimer.value) {
+    window.clearTimeout(autoSaveTimer.value);
+    autoSaveTimer.value = null;
+  }
+  autoSaveStatus.value = "idle";
   doc.value = normalizeProjectDoc(newDoc);
   fileName.value = name;
   selectedProfileId.value = doc.value.profiles[0]?.characterId ?? null;
@@ -470,6 +527,9 @@ function setLoadedDoc(newDoc, name) {
   mobilePromptDrawerOpen.value = false;
   promptSearchCursor.value = 0;
   mobileRegexSubTab.value = 'list';
+  nextTick(() => {
+    suppressAutoSave.value = false;
+  });
 }
 
 function createNewProject() {
@@ -1273,6 +1333,14 @@ watch(exportFormat, (newFormat) => {
   }
 });
 
+watch(doc, () => {
+  scheduleAutoSave();
+}, { deep: true });
+
+watch(selectedRegexIds, () => {
+  scheduleAutoSave();
+}, { deep: true });
+
 onMounted(async () => {
   createNewProject();
   try {
@@ -1303,8 +1371,11 @@ onMounted(async () => {
       <!-- 頂部操作按鈕 -->
       <div class="flex flex-col gap-2 w-full lg:w-auto lg:flex-row lg:items-center lg:justify-end">
         <div class="grid grid-cols-2 gap-2 w-full lg:w-auto lg:flex lg:items-center lg:justify-end">
-          <span class="min-h-9 flex items-center text-xs px-3 py-1.5 rounded-lg bg-line/40 border border-line text-muted font-medium truncate lg:max-w-[150px]" :title="fileName || '未加載'">
-            {{ fileName || '未加載' }}
+          <span class="min-h-9 flex flex-col justify-center text-xs px-3 py-1.5 rounded-lg bg-line/40 border border-line text-muted font-medium truncate lg:max-w-[190px]" :title="fileName || '未加載'">
+            <span class="truncate">{{ fileName || '未加載' }}</span>
+            <span class="text-[10px] font-semibold" :class="autoSaveStatus === 'error' ? 'text-red-500' : autoSaveStatus === 'saving' || autoSaveStatus === 'pending' ? 'text-brand' : 'text-muted'">
+              {{ getAutoSaveStatusLabel() }}
+            </span>
           </span>
 
           <select
