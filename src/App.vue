@@ -79,8 +79,13 @@ const REGEX_SWITCH_LABELS = {
 
 // 響應式狀態
 const activeTab = ref('prompts'); // 'prompts' | 'regex' | 'api'
-const mobileSubTab = ref('list'); // 'list' | 'edit' | 'preview' (用於提示詞分頁的手機版)
+const mobileSubTab = ref('edit'); // 'edit' | 'preview' (用於提示詞分頁的手機版)
 const mobileRegexSubTab = ref('list'); // 'list' | 'edit' (用於正則分頁的手機版)
+const mobilePromptDrawerOpen = ref(false);
+const promptSearchCursor = ref(0);
+const promptDragIndex = ref(null);
+const promptTouchDrag = ref(null);
+const promptEdgeTouchStart = ref(null);
 
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024);
 if (typeof window !== 'undefined') {
@@ -131,6 +136,8 @@ const activeProfile = computed(() => {
   return profile || doc.value.profiles[0] || null;
 });
 
+const hasPromptFilter = computed(() => promptFilter.value.trim().length > 0);
+
 const visiblePromptEntries = computed(() => {
   if (!activeProfile.value || !doc.value) return [];
   const query = promptFilter.value.trim().toLowerCase();
@@ -140,13 +147,23 @@ const visiblePromptEntries = computed(() => {
     const block = doc.value.blocks[entry.blockId];
     const title = block?.title || entry.blockId;
     if (query) {
-      const hay = `${title} ${entry.blockId} ${(block?.role || "").trim()}`.toLowerCase();
+      const hay = makePromptSearchText(entry, block, title).toLowerCase();
       if (!hay.includes(query)) continue;
     }
     out.push({ entry, block, index });
   }
   return out;
 });
+
+const promptSearchSummary = computed(() => {
+  const total = visiblePromptEntries.value.length;
+  if (!total) return "0/0";
+  const selectedIndex = visiblePromptEntries.value.findIndex(item => item.entry.blockId === selectedPromptId.value);
+  const cursor = selectedIndex >= 0 ? selectedIndex : Math.min(promptSearchCursor.value, total - 1);
+  return `${cursor + 1}/${total}`;
+});
+
+const canDragSortPrompts = computed(() => !hasPromptFilter.value && !!activeProfile.value);
 
 const selectedPromptEntry = computed(() => {
   if (!activeProfile.value || !selectedPromptId.value) return null;
@@ -250,6 +267,37 @@ function formatApiType(type) {
 function formatApiKey(key) {
   const zhLabel = API_SETTING_LABELS[key];
   return zhLabel ? labelWithKey(zhLabel, key) : key;
+}
+
+function stringifySearchValue(value, seen = new Set()) {
+  if (value == null) return "";
+  if (["string", "number", "boolean"].includes(typeof value)) return String(value);
+  if (typeof value !== "object") return "";
+  if (seen.has(value)) return "";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map(item => stringifySearchValue(item, seen)).filter(Boolean).join(" ");
+  }
+  return Object.entries(value)
+    .map(([key, val]) => `${key} ${stringifySearchValue(val, seen)}`)
+    .filter(Boolean)
+    .join(" ");
+}
+
+function makePromptSearchText(entry, block, title = "") {
+  const meta = block?.meta && typeof block.meta === "object" ? block.meta : {};
+  const tagKeys = ["tag", "tags", "label", "labels", "category", "categories", "group", "groups"];
+  const tagText = tagKeys.map(key => stringifySearchValue(meta[key])).filter(Boolean).join(" ");
+  return [
+    title,
+    entry?.blockId,
+    block?.id,
+    block?.role,
+    block?.marker ? "marker 標記塊" : "",
+    block?.text,
+    tagText,
+    stringifySearchValue(meta)
+  ].filter(Boolean).join(" ");
 }
 
 function cloneDeep(value) {
@@ -418,7 +466,9 @@ function setLoadedDoc(newDoc, name) {
   includeApiInJson.value = false;
   
   // 重置手機版子分頁
-  mobileSubTab.value = 'list';
+  mobileSubTab.value = 'edit';
+  mobilePromptDrawerOpen.value = false;
+  promptSearchCursor.value = 0;
   mobileRegexSubTab.value = 'list';
 }
 
@@ -708,12 +758,45 @@ function deleteActiveProfile() {
 }
 
 // 提示詞操作
-function selectPrompt(blockId) {
+function openPromptDrawer() {
+  if (windowWidth.value < 1024) {
+    mobilePromptDrawerOpen.value = true;
+  }
+}
+
+function closePromptDrawer() {
+  mobilePromptDrawerOpen.value = false;
+}
+
+function selectPrompt(blockId, options = {}) {
+  if (!blockId) return;
   selectedPromptId.value = blockId;
+  const visibleIndex = visiblePromptEntries.value.findIndex(item => item.entry.blockId === blockId);
+  if (visibleIndex >= 0) promptSearchCursor.value = visibleIndex;
   // 在手機版上，點擊列表項後自動切換到編輯子分頁
   if (windowWidth.value < 1024) {
     mobileSubTab.value = 'edit';
+    if (!options.keepDrawerOpen) closePromptDrawer();
   }
+}
+
+function jumpPromptSearch(direction) {
+  const entries = visiblePromptEntries.value;
+  if (!entries.length) return;
+  const selectedIndex = entries.findIndex(item => item.entry.blockId === selectedPromptId.value);
+  const baseIndex = selectedIndex >= 0 ? selectedIndex : Math.min(promptSearchCursor.value, entries.length - 1);
+  const nextIndex = (baseIndex + direction + entries.length) % entries.length;
+  promptSearchCursor.value = nextIndex;
+  selectPrompt(entries[nextIndex].entry.blockId, { keepDrawerOpen: mobilePromptDrawerOpen.value });
+}
+
+function canReorderPrompts(showAlert = true) {
+  if (!activeProfile.value) return false;
+  if (hasPromptFilter.value) {
+    if (showAlert) alert("搜尋/過濾中暫停排序，請清空搜尋後再移動條目，避免改到隱藏項目的真實順序。");
+    return false;
+  }
+  return true;
 }
 
 function isPromptReferenced(promptId) {
@@ -831,12 +914,124 @@ function deleteSelectedPrompt() {
 }
 
 function movePrompt(index, direction) {
-  if (!activeProfile.value) return;
+  if (!canReorderPrompts()) return;
   const targetIndex = index + direction;
-  if (targetIndex < 0 || targetIndex >= activeProfile.value.order.length) return;
-  const tmp = activeProfile.value.order[targetIndex];
-  activeProfile.value.order[targetIndex] = activeProfile.value.order[index];
-  activeProfile.value.order[index] = tmp;
+  movePromptTo(index, targetIndex);
+}
+
+function movePromptTo(index, targetIndex) {
+  if (!canReorderPrompts(false)) return;
+  const order = activeProfile.value.order;
+  if (index < 0 || index >= order.length) return;
+  const finalIndex = Math.max(0, Math.min(targetIndex, order.length - 1));
+  if (finalIndex === index) return;
+  const [moved] = order.splice(index, 1);
+  order.splice(finalIndex, 0, moved);
+}
+
+function movePromptToPosition(index) {
+  if (!canReorderPrompts()) return;
+  const total = activeProfile.value.order.length;
+  const raw = window.prompt(`移動到第幾個位置？請輸入 1-${total}`, String(index + 1));
+  if (raw == null) return;
+  const position = Number(raw.trim());
+  if (!Number.isInteger(position) || position < 1 || position > total) {
+    alert(`位置必須是 1-${total} 的整數。`);
+    return;
+  }
+  movePromptTo(index, position - 1);
+}
+
+function handlePromptDragStart(index, event) {
+  if (!canReorderPrompts()) return;
+  promptDragIndex.value = index;
+  if (event?.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(index));
+  }
+}
+
+function handlePromptDrop(targetIndex, event) {
+  event?.preventDefault?.();
+  const sourceIndex = promptDragIndex.value;
+  promptDragIndex.value = null;
+  if (sourceIndex == null) return;
+  movePromptTo(sourceIndex, targetIndex);
+}
+
+function handlePromptDragEnd() {
+  promptDragIndex.value = null;
+}
+
+function handlePromptTouchDragStart(index, event) {
+  if (!canReorderPrompts()) return;
+  const touch = event.touches?.[0];
+  if (!touch) return;
+  const state = {
+    index,
+    currentIndex: index,
+    startX: touch.clientX,
+    startY: touch.clientY,
+    activated: false,
+    timer: null
+  };
+  state.timer = window.setTimeout(() => {
+    state.activated = true;
+    promptDragIndex.value = index;
+    if (navigator?.vibrate) navigator.vibrate(20);
+  }, 260);
+  promptTouchDrag.value = state;
+}
+
+function handlePromptTouchDragMove(event) {
+  const state = promptTouchDrag.value;
+  const touch = event.touches?.[0];
+  if (!state || !touch) return;
+  const distance = Math.hypot(touch.clientX - state.startX, touch.clientY - state.startY);
+  if (!state.activated && distance > 10) {
+    clearTimeout(state.timer);
+    promptTouchDrag.value = null;
+    return;
+  }
+  if (!state.activated) return;
+  event.preventDefault();
+  const element = document.elementFromPoint(touch.clientX, touch.clientY);
+  const row = element?.closest?.("[data-prompt-index]");
+  const nextIndex = Number(row?.dataset?.promptIndex);
+  if (Number.isInteger(nextIndex)) state.currentIndex = nextIndex;
+}
+
+function handlePromptTouchDragEnd() {
+  const state = promptTouchDrag.value;
+  if (!state) return;
+  clearTimeout(state.timer);
+  if (state.activated) movePromptTo(state.index, state.currentIndex);
+  promptTouchDrag.value = null;
+  promptDragIndex.value = null;
+}
+
+function handlePromptEdgeTouchStart(event) {
+  if (!isMobile.value || activeTab.value !== 'prompts' || mobilePromptDrawerOpen.value) return;
+  const touch = event.touches?.[0];
+  if (!touch || touch.clientX > 80) return;
+  promptEdgeTouchStart.value = { x: touch.clientX, y: touch.clientY };
+}
+
+function handlePromptEdgeTouchMove(event) {
+  const start = promptEdgeTouchStart.value;
+  if (!start) return;
+  const touch = event.touches?.[0];
+  if (!touch) return;
+  const dx = touch.clientX - start.x;
+  const dy = Math.abs(touch.clientY - start.y);
+  if (dx > 72 && dy < 70) {
+    openPromptDrawer();
+    promptEdgeTouchStart.value = null;
+  }
+}
+
+function handlePromptEdgeTouchEnd() {
+  promptEdgeTouchStart.value = null;
 }
 
 // 正則操作
@@ -1091,7 +1286,7 @@ onMounted(async () => {
 <template>
   <div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-text font-sans antialiased">
     <!-- 頂部導航欄 -->
-    <header class="flex flex-col sm:flex-row items-center justify-between px-4 py-3 bg-bg-soft border-b border-line shadow-sm shrink-0 gap-3 sm:gap-0">
+    <header class="flex flex-col lg:flex-row items-center justify-between px-4 py-3 bg-bg-soft border-b border-line shadow-sm shrink-0 gap-3 lg:gap-0">
       <div class="flex items-center gap-3">
         <div class="flex items-center justify-center w-10 h-10 rounded-xl bg-brand text-white font-bold text-lg shadow-md shadow-brand/20">
           酒
@@ -1106,47 +1301,53 @@ onMounted(async () => {
       </div>
 
       <!-- 頂部操作按鈕 -->
-      <div class="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
-        <span class="text-xs px-2.5 py-1 rounded-lg bg-line/40 border border-line text-muted font-medium max-w-[150px] truncate" :title="fileName || '未加載'">
-          {{ fileName || '未加載' }}
-        </span>
+      <div class="flex flex-col gap-2 w-full lg:w-auto lg:flex-row lg:items-center lg:justify-end">
+        <div class="grid grid-cols-2 gap-2 w-full lg:w-auto lg:flex lg:items-center lg:justify-end">
+          <span class="min-h-9 flex items-center text-xs px-3 py-1.5 rounded-lg bg-line/40 border border-line text-muted font-medium truncate lg:max-w-[150px]" :title="fileName || '未加載'">
+            {{ fileName || '未加載' }}
+          </span>
 
-        <select
-          :value="currentLocalProjectId || ''"
-          :disabled="isLocalProjectBusy || localProjects.length === 0"
-          @change="handleLocalProjectSelect"
-          class="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg transition-all shadow-sm max-w-[180px]"
-          title="切換本機工程庫中的工程"
-        >
-          <option value="">本機工程庫</option>
-          <option v-for="project in localProjects" :key="project.id" :value="project.id">
-            {{ project.title }}
-          </option>
-        </select>
+          <select
+            :value="currentLocalProjectId || ''"
+            :disabled="isLocalProjectBusy || localProjects.length === 0"
+            @change="handleLocalProjectSelect"
+            class="min-h-9 w-full px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg transition-all shadow-sm lg:w-[180px]"
+            title="切換本機工程庫中的工程"
+          >
+            <option value="">本機工程庫</option>
+            <option v-for="project in localProjects" :key="project.id" :value="project.id">
+              {{ project.title }}
+            </option>
+          </select>
+        </div>
         
         <input type="file" ref="fileInputRef" accept=".json" class="hidden" @change="handleFileChange" />
         
-        <button @click="triggerFileInput" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center gap-1">
-          <svg class="w-3.5 h-3.5"><use href="#icon-folder-open" /></svg> 導入
-        </button>
-        <button @click="createNewProject" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center gap-1">
-          <svg class="w-3.5 h-3.5"><use href="#icon-sparkles" /></svg> 新建
-        </button>
-        <button @click="renameCurrentProject" :disabled="!isDocLoaded || isLocalProjectBusy" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center gap-1">
-          改名
-        </button>
-        <button @click="saveProjectFile" :disabled="!isDocLoaded" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center gap-1">
-          <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 下載工程
-        </button>
-        <button @click="saveProjectToLocalLibrary" :disabled="!isDocLoaded || isLocalProjectBusy" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center gap-1">
-          <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 保存本機
-        </button>
-        <button @click="deleteCurrentLocalProject" :disabled="!currentLocalProjectId || isLocalProjectBusy" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-red-50 hover:text-red-600 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center gap-1">
-          刪除本機
-        </button>
-        <button @click="openDocs" class="p-1.5 text-xs rounded-lg border border-line hover:bg-bg transition-all shadow-sm" title="查看文檔">
-          <svg class="w-3.5 h-3.5"><use href="#icon-question-circle" /></svg>
-        </button>
+        <div class="grid grid-cols-3 gap-2 w-full lg:w-auto lg:flex lg:items-center lg:justify-end">
+          <button @click="triggerFileInput" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center justify-center gap-1">
+            <svg class="w-3.5 h-3.5"><use href="#icon-folder-open" /></svg> 導入
+          </button>
+          <button @click="createNewProject" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center justify-center gap-1">
+            <svg class="w-3.5 h-3.5"><use href="#icon-sparkles" /></svg> 新建
+          </button>
+          <button @click="renameCurrentProject" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+            改名
+          </button>
+          <button @click="saveProjectFile" :disabled="!isDocLoaded" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+            <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 下載工程
+          </button>
+          <button @click="saveProjectToLocalLibrary" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+            <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 保存本機
+          </button>
+          <div class="grid grid-cols-[1fr_auto] gap-2 lg:flex lg:items-center">
+            <button @click="deleteCurrentLocalProject" :disabled="!currentLocalProjectId || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-red-50 hover:text-red-600 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+              刪除本機
+            </button>
+            <button @click="openDocs" class="min-h-9 min-w-9 p-1.5 text-xs rounded-lg border border-line hover:bg-bg transition-all shadow-sm flex items-center justify-center" title="查看文檔">
+              <svg class="w-3.5 h-3.5"><use href="#icon-question-circle" /></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
 
@@ -1176,36 +1377,53 @@ onMounted(async () => {
     <main class="flex-1 min-height-0 overflow-hidden relative">
       
       <!-- 1. 提示詞預設分頁 -->
-      <section v-show="activeTab === 'prompts'" class="h-full flex flex-col">
-        <!-- 手機版子分頁切換欄 (僅在 lg 以下顯示) -->
+      <section
+        v-show="activeTab === 'prompts'"
+        class="h-full flex flex-col"
+        @touchstart.passive="handlePromptEdgeTouchStart"
+        @touchmove="handlePromptEdgeTouchMove"
+        @touchend="handlePromptEdgeTouchEnd"
+        @touchcancel="handlePromptEdgeTouchEnd"
+      >
+        <!-- 手機版子分頁切換欄：保留編輯/預覽，大列表改由左側抽屜開啟 -->
         <div class="lg:hidden flex border-b border-line bg-bg-soft shrink-0">
-          <button 
-            @click="mobileSubTab = 'list'" 
-            :class="['flex-1 py-2.5 text-xs font-bold border-b-2 transition-all', mobileSubTab === 'list' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+          <button
+            @click="openPromptDrawer"
+            class="flex-1 py-3 text-xs font-bold border-b-2 border-transparent text-muted transition-all flex items-center justify-center gap-1.5"
           >
             <svg class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg> 列表 ({{ visiblePromptEntries.length }})
           </button>
           <button
             @click="mobileSubTab = 'edit'"
-            :class="['flex-1 py-2.5 text-xs font-bold border-b-2 transition-all', mobileSubTab === 'edit' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+            :class="['flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5', mobileSubTab === 'edit' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
           >
-            <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 編輯 {{ selectedPromptBlock ? `(${selectedPromptBlock.title})` : '' }}
+            <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 編輯
           </button>
           <button
             @click="mobileSubTab = 'preview'"
-            :class="['flex-1 py-2.5 text-xs font-bold border-b-2 transition-all', mobileSubTab === 'preview' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+            :class="['flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5', mobileSubTab === 'preview' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
           >
-            <svg class="w-3.5 h-3.5"><use href="#icon-eye" /></svg> 導出預覽
+            <svg class="w-3.5 h-3.5"><use href="#icon-eye" /></svg> 預覽
           </button>
         </div>
+
+        <div
+          v-if="isMobile && mobilePromptDrawerOpen"
+          class="fixed inset-0 z-40 bg-black/30 lg:hidden"
+          @click="closePromptDrawer"
+        ></div>
 
         <!-- 提示詞佈局容器 -->
         <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 h-full min-h-0 overflow-hidden">
           
           <!-- 1.1 提示詞列表面板 (lg:col-span-3) -->
-          <aside 
-            v-show="mobileSubTab === 'list' || !isMobile" 
-            class="lg:col-span-3 border-r border-line bg-white flex flex-col h-full min-h-0"
+          <aside
+            v-show="mobilePromptDrawerOpen || !isMobile"
+            :class="[
+              'border-r border-line bg-white flex flex-col h-full min-h-0',
+              isMobile ? 'fixed inset-y-0 left-0 z-50 w-80 max-w-[86vw] shadow-2xl transition-transform duration-200' : 'lg:col-span-3',
+              isMobile && !mobilePromptDrawerOpen ? '-translate-x-full' : 'translate-x-0'
+            ]"
           >
             <!-- 配置組選擇與管理 -->
             <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 space-y-2">
@@ -1230,20 +1448,46 @@ onMounted(async () => {
 
             <!-- 搜索與新增提示詞 -->
             <div class="p-3 border-b border-line shrink-0 space-y-2">
-              <input 
-                v-model="promptFilter" 
-                type="text" 
-                placeholder="搜索提示詞標題/ID/角色..."
-                class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-line bg-bg focus:outline-none focus:border-brand"
+              <div class="flex items-center justify-between lg:hidden">
+                <span class="text-xs font-bold text-brand">提示詞列表</span>
+                <button @click="closePromptDrawer" class="min-h-9 px-3 text-xs font-semibold rounded-lg border border-line bg-white hover:bg-bg transition-all">
+                  關閉
+                </button>
+              </div>
+              <input
+                v-model="promptFilter"
+                type="text"
+                placeholder="搜索標題/ID/角色/內文/tag..."
+                class="w-full min-h-10 px-3 py-2 text-xs rounded-lg border border-line bg-bg focus:outline-none focus:border-brand"
               />
+              <div v-if="hasPromptFilter" class="flex items-center gap-1.5 rounded-lg border border-line bg-bg-soft/50 p-1.5">
+                <button
+                  @click="jumpPromptSearch(-1)"
+                  :disabled="visiblePromptEntries.length === 0"
+                  class="min-h-9 px-2.5 text-xs font-semibold rounded border border-line bg-white hover:bg-bg disabled:opacity-50 transition-all"
+                >
+                  上一筆
+                </button>
+                <button
+                  @click="jumpPromptSearch(1)"
+                  :disabled="visiblePromptEntries.length === 0"
+                  class="min-h-9 px-2.5 text-xs font-semibold rounded border border-line bg-white hover:bg-bg disabled:opacity-50 transition-all"
+                >
+                  下一筆
+                </button>
+                <span class="ml-auto text-[11px] font-bold text-muted">{{ promptSearchSummary }}</span>
+              </div>
+              <div v-if="hasPromptFilter" class="text-[10px] text-muted">
+                搜尋範圍包含標題、ID、角色、內文、meta 與 tag；搜尋中暫停排序以避免改錯真實順序。
+              </div>
               <div class="grid grid-cols-3 gap-1">
-                <button @click="addPrompt" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all flex items-center justify-center gap-1">
+                <button @click="addPrompt" class="min-h-10 py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all flex items-center justify-center gap-1">
                   <svg class="w-3.5 h-3.5"><use href="#icon-plus-circle" /></svg> 新增
                 </button>
-                <button @click="duplicatePrompt" :disabled="!selectedPromptId" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-1">
+                <button @click="duplicatePrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-1">
                   <svg class="w-3.5 h-3.5"><use href="#icon-users" /></svg> 複製
                 </button>
-                <button @click="deleteSelectedPrompt" :disabled="!selectedPromptId" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-red-50 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-1">
+                <button @click="deleteSelectedPrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-red-50 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-1">
                   <svg class="w-3.5 h-3.5"><use href="#icon-trash" /></svg> 刪除
                 </button>
               </div>
@@ -1254,18 +1498,28 @@ onMounted(async () => {
               <div v-if="visiblePromptEntries.length === 0" class="text-center py-8 text-xs text-muted">
                 沒有匹配的提示詞
               </div>
-              <div 
-                v-for="{ entry, block, index } in visiblePromptEntries" 
+              <div
+                v-for="{ entry, block, index } in visiblePromptEntries"
                 :key="entry.blockId"
+                :data-prompt-index="index"
+                :draggable="canDragSortPrompts"
                 @click="selectPrompt(entry.blockId)"
-                :class="['group flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all', entry.blockId === selectedPromptId ? 'border-brand bg-brand-soft/40 shadow-sm' : 'border-line/60 hover:border-line hover:bg-bg/30']"
+                @dragstart="handlePromptDragStart(index, $event)"
+                @dragover.prevent
+                @drop="handlePromptDrop(index, $event)"
+                @dragend="handlePromptDragEnd"
+                @touchstart.passive="handlePromptTouchDragStart(index, $event)"
+                @touchmove="handlePromptTouchDragMove"
+                @touchend="handlePromptTouchDragEnd"
+                @touchcancel="handlePromptTouchDragEnd"
+                :class="['group flex items-center gap-2 min-h-14 p-3 lg:min-h-0 lg:p-2.5 rounded-xl border cursor-pointer transition-all', promptDragIndex === index ? 'border-brand bg-brand-soft/70 shadow-md' : entry.blockId === selectedPromptId ? 'border-brand bg-brand-soft/40 shadow-sm' : 'border-line/60 hover:border-line hover:bg-bg/30']"
               >
                 <!-- 啟用開關 -->
-                <input 
-                  type="checkbox" 
-                  v-model="entry.enabled" 
-                  @click.stopPropagation 
-                  class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer"
+                <input
+                  type="checkbox"
+                  v-model="entry.enabled"
+                  @click.stopPropagation
+                  class="w-5 h-5 lg:w-4 lg:h-4 rounded border-line text-brand focus:ring-brand cursor-pointer shrink-0"
                 />
                 
                 <!-- 標題與元數據 -->
@@ -1284,22 +1538,42 @@ onMounted(async () => {
                   </div>
                 </div>
 
-                <!-- 上下移動按鈕 -->
-                <div class="flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity shrink-0">
-                  <button 
-                    @click.stopPropagation="movePrompt(index, -1)" 
-                    :disabled="index === 0"
-                    class="p-0.5 text-[10px] rounded hover:bg-line/50 disabled:opacity-30"
+                <!-- 排序操作 -->
+                <div class="grid grid-cols-2 gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100 transition-opacity shrink-0">
+                  <button
+                    @click.stopPropagation="movePromptTo(index, 0)"
+                    :disabled="index === 0 || hasPromptFilter"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    title="移到頂部"
+                  >頂</button>
+                  <button
+                    @click.stopPropagation="movePrompt(index, -1)"
+                    :disabled="index === 0 || hasPromptFilter"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    title="上移"
                   >
-                    <svg class="w-2.5 h-2.5"><use href="#icon-chevron-up" /></svg>
+                    <svg class="w-3 h-3 mx-auto"><use href="#icon-chevron-up" /></svg>
                   </button>
                   <button
+                    @click.stopPropagation="movePromptToPosition(index)"
+                    :disabled="hasPromptFilter"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    title="移到指定序號"
+                  >序</button>
+                  <button
                     @click.stopPropagation="movePrompt(index, 1)"
-                    :disabled="index === activeProfile.order.length - 1"
-                    class="p-0.5 text-[10px] rounded hover:bg-line/50 disabled:opacity-30"
+                    :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    title="下移"
                   >
-                    <svg class="w-2.5 h-2.5"><use href="#icon-chevron-down" /></svg>
+                    <svg class="w-3 h-3 mx-auto"><use href="#icon-chevron-down" /></svg>
                   </button>
+                  <button
+                    @click.stopPropagation="movePromptTo(index, activeProfile.order.length - 1)"
+                    :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
+                    class="col-span-2 min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    title="移到底部"
+                  >底 / 長按拖曳</button>
                 </div>
               </div>
             </div>
@@ -1307,13 +1581,18 @@ onMounted(async () => {
 
           <!-- 1.2 提示詞編輯器面板 (lg:col-span-5) -->
           <section 
-            v-show="mobileSubTab === 'edit' || !isMobile" 
+            v-show="mobileSubTab !== 'preview' || !isMobile"
             class="lg:col-span-5 border-r border-line bg-white flex flex-col h-full min-h-0"
           >
-            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 flex items-center justify-between">
-              <h2 class="text-xs font-bold text-brand flex items-center gap-1.5">
-                <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 提示詞編輯器
-              </h2>
+            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <button @click="openPromptDrawer" class="lg:hidden min-h-9 px-3 text-xs font-semibold rounded-lg border border-line bg-white hover:bg-bg transition-all flex items-center gap-1">
+                  <svg class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg> 列表
+                </button>
+                <h2 class="text-xs font-bold text-brand flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 提示詞編輯器
+                </h2>
+              </div>
               <span v-if="selectedPromptBlock" class="text-[10px] font-mono text-muted bg-line/30 px-2 py-0.5 rounded">
                 ID: {{ selectedPromptBlock.id }}
               </span>
