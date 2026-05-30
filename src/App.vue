@@ -88,6 +88,7 @@ const promptSearchCursor = ref(0);
 const isDark = ref(false);
 const editorScrollTop = ref(0);
 const modalInputRef = ref(null);
+const expandEditorOpen = ref(false);
 const modalState = ref({
   show: false,
   type: 'alert',
@@ -348,6 +349,29 @@ const exportOutput = computed(() => {
   } catch (err) {
     return `導出失敗: ${String(err?.message || err)}`;
   }
+});
+
+const previewBlocks = computed(() => {
+  if (!doc.value || !activeProfile.value || exportFormat.value === 'json') return [];
+  
+  const blocks = [];
+  for (const entry of activeProfile.value.order) {
+    const enabled = txtPromptMode.value === "all" ? true : Boolean(entry.enabled);
+    if (!enabled) continue;
+
+    const block = doc.value.blocks[entry.blockId];
+    if (!block) continue;
+
+    const text = typeof block.text === "string" ? block.text : "";
+    const isEmpty = text.length === 0;
+    if (isEmpty && !includeEmpty.value) continue;
+
+    blocks.push({
+      blockId: entry.blockId,
+      text: text
+    });
+  }
+  return blocks;
 });
 
 // 輔助函數
@@ -617,6 +641,7 @@ function setLoadedDoc(newDoc, name) {
   includeEmpty.value = false;
   includeRegexInJson.value = false;
   includeApiInJson.value = false;
+  expandEditorOpen.value = false;
   
   // 重置手機版子分頁
   mobileSubTab.value = 'edit';
@@ -1121,6 +1146,7 @@ function handlePromptDragEnd() {
 
 function handlePromptTouchDragStart(index, event) {
   if (!canReorderPrompts()) return;
+  if (event.target.closest('button') || event.target.closest('input')) return;
   const touch = event.touches?.[0];
   if (!touch) return;
   const state = {
@@ -1473,7 +1499,7 @@ onMounted(async () => {
     </div>
 
     <!-- 頂部導航欄 -->
-    <header class="glass-panel backdrop-blur-md sticky top-0 z-30 flex flex-col lg:flex-row items-center justify-between px-4 py-3 bg-bg-soft/40 border-b border-line/30 shadow-sm shrink-0 gap-3 lg:gap-0">
+    <header class="glass-panel backdrop-blur-md sticky top-0 z-30 flex flex-col lg:flex-row items-center justify-between px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] bg-bg-soft/40 border-b border-line/30 shadow-sm shrink-0 gap-3 lg:gap-0">
       <!-- Logo + Title -->
       <div class="flex items-center gap-2">
         <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-brand text-white font-bold text-base shadow-sm shadow-brand/20">
@@ -1640,7 +1666,7 @@ onMounted(async () => {
     </header>
 
     <!-- 主分頁切換標籤 -->
-    <nav class="flex border-b border-line/20 bg-white/10 dark:bg-black/10 backdrop-blur-sm shrink-0 px-4 z-10 relative">
+    <nav class="flex border-b border-line/20 bg-white/10 dark:bg-black/10 backdrop-blur-sm shrink-0 px-4 pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] z-10 relative overflow-x-auto">
       <button 
         @click="activeTab = 'prompts'" 
         :class="['px-5 py-3.5 text-sm font-bold border-b-2 transition-all duration-200 flex items-center gap-2', activeTab === 'prompts' ? 'border-brand text-brand bg-brand/5 shadow-[inset_0_-2px_0_0_var(--brand)]' : 'border-transparent text-muted hover:text-text hover:bg-white/20 dark:hover:bg-white/5']"
@@ -1662,7 +1688,7 @@ onMounted(async () => {
     </nav>
 
     <!-- 主內容區域 -->
-    <main class="flex-1 min-height-0 overflow-hidden relative z-10 p-1.5 lg:p-3">
+    <main class="flex-1 min-height-0 overflow-hidden relative z-10 p-1.5 lg:p-3 pb-[calc(0.375rem+env(safe-area-inset-bottom))] lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))] pl-[calc(0.375rem+env(safe-area-inset-left))] lg:pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.375rem+env(safe-area-inset-right))] lg:pr-[calc(0.75rem+env(safe-area-inset-right))]">
       
       <!-- 1. 提示詞預設分頁 -->
       <section
@@ -1799,11 +1825,12 @@ onMounted(async () => {
                 @dragover.prevent
                 @drop="handlePromptDrop(index, $event)"
                 @dragend="handlePromptDragEnd"
+                @contextmenu.prevent
                 @touchstart.passive="handlePromptTouchDragStart(index, $event)"
                 @touchmove="handlePromptTouchDragMove"
                 @touchend="handlePromptTouchDragEnd"
                 @touchcancel="handlePromptTouchDragEnd"
-                :class="['group flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative overflow-hidden', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98]' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-line/40 hover:border-brand/40 hover:bg-brand/5']"
+                :class="['group flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative overflow-hidden select-none', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98]' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-transparent hover:bg-line/20']"
               >
                 <!-- Selected Indicator Line -->
                 <div v-if="entry.blockId === selectedPromptId" class="absolute left-0 top-0 bottom-0 w-1 bg-brand"></div>
@@ -1833,12 +1860,7 @@ onMounted(async () => {
                 </div>
 
                 <!-- 排序操作 -->
-                <div 
-                  :class="[
-                    'grid grid-cols-2 gap-1 transition-all shrink-0', 
-                    entry.blockId === selectedPromptId ? 'opacity-100 w-auto pointer-events-auto' : 'opacity-0 w-0 overflow-hidden pointer-events-none lg:w-auto lg:pointer-events-auto lg:group-hover:opacity-100 lg:focus-within:opacity-100'
-                  ]"
-                >
+                <div class="grid grid-cols-2 gap-1 shrink-0">
                   <button
                     @click.stopPropagation="movePromptTo(index, 0)"
                     :disabled="index === 0 || hasPromptFilter"
@@ -1872,7 +1894,7 @@ onMounted(async () => {
                     :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
                     class="col-span-2 min-h-7 px-1 text-[9px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30 leading-none"
                     title="移到底部"
-                  >底 / 長按拖曳</button>
+                  >底</button>
                 </div>
               </div>
             </div>
@@ -1959,7 +1981,13 @@ onMounted(async () => {
 
                 <!-- 內容編輯區 (IDE Look-alike with line numbers) -->
                 <div class="space-y-1 flex flex-col h-[calc(100vh-380px)] lg:h-[calc(100vh-320px)] min-h-[200px]">
-                  <label class="text-xs font-bold text-muted shrink-0">提示詞內容 (Text)</label>
+                  <div class="flex items-center justify-between shrink-0">
+                    <label class="text-xs font-bold text-muted">提示詞內容 (Text)</label>
+                    <button @click="expandEditorOpen = true" class="px-2 py-1 text-[10px] rounded border border-line/60 bg-inputBg hover:border-brand hover:text-brand transition-all flex items-center gap-1 shadow-sm" title="全螢幕編輯">
+                      <svg class="w-3 h-3"><use href="#icon-expand" /></svg>
+                      <span class="hidden sm:inline">全螢幕編輯</span>
+                    </button>
+                  </div>
                   <div class="relative flex flex-1 rounded-xl border border-line/50 overflow-hidden bg-inputBg focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15 focus-within:shadow-[0_0_12px_rgba(176,86,45,0.08)]">
                     <!-- Line numbers panel -->
                     <div class="w-10 bg-bg-soft/40 dark:bg-black/20 border-r border-line/30 flex flex-col items-end pr-2.5 py-3 select-none text-[10px] font-mono text-muted/40 leading-relaxed overflow-hidden">
@@ -2043,13 +2071,32 @@ onMounted(async () => {
             </div>
 
             <!-- 預覽文本框 -->
-            <div class="flex-1 p-3 min-h-0 bg-bg-soft/10">
+            <div class="flex-1 p-3 min-h-0 bg-bg-soft/10 relative overflow-hidden">
               <textarea 
+                v-if="exportFormat === 'json'"
                 readonly 
                 :value="exportOutput" 
                 placeholder="導出預覽區域..."
                 class="w-full h-full p-3 text-xs rounded-lg border border-line/60 bg-bg-soft/40 font-mono resize-none focus:outline-none leading-relaxed custom-scrollbar dark:bg-black/20"
               ></textarea>
+              
+              <!-- TXT 可點擊預覽區 -->
+              <div 
+                v-else 
+                class="w-full h-full p-2 text-xs rounded-lg border border-line/60 bg-bg-soft/40 font-mono overflow-y-auto leading-relaxed custom-scrollbar dark:bg-black/20 space-y-1"
+              >
+                <div v-if="previewBlocks.length === 0" class="text-muted p-2">導出結果為空...</div>
+                <div 
+                  v-for="(block, idx) in previewBlocks" 
+                  :key="idx" 
+                  @click="selectPrompt(block.blockId)"
+                  class="cursor-pointer hover:bg-brand/10 transition-colors p-2 rounded relative group"
+                  :class="block.blockId === selectedPromptId ? 'bg-brand/10 ring-1 ring-brand/40 text-brand' : 'text-text hover:text-brand'"
+                  title="點擊跳轉至此提示詞"
+                >
+                  <div class="whitespace-pre-wrap break-words" :class="{ 'opacity-50 italic': !block.text }">{{ block.text || '(空提示詞)' }}</div>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -2407,9 +2454,42 @@ onMounted(async () => {
 
     </main>
 
+    <!-- 全螢幕提示詞編輯彈窗 -->
+    <Transition name="fade">
+      <div v-if="expandEditorOpen" class="fixed inset-0 z-[60] flex flex-col bg-bg/95 backdrop-blur-md pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+        <!-- Header -->
+        <div class="flex items-center justify-between p-3 border-b border-line/20 bg-bg-soft/60 shrink-0 shadow-sm">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center font-bold">
+              <svg class="w-4 h-4"><use href="#icon-expand" /></svg>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-text">全螢幕編輯</h3>
+              <p class="text-[10px] text-muted font-mono" v-if="selectedPromptBlock">ID: {{ selectedPromptBlock.id }}</p>
+            </div>
+          </div>
+          <button @click="expandEditorOpen = false" class="min-h-9 px-4 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 transition-all shadow-sm flex items-center gap-1.5 hover:shadow-lg hover:shadow-brand/20">
+            <svg class="w-3.5 h-3.5"><use href="#icon-checkmark-circle" /></svg> 完成
+          </button>
+        </div>
+        
+        <!-- Editor -->
+        <div class="flex-1 flex flex-col p-4 lg:p-6 overflow-hidden">
+          <div class="relative flex flex-1 rounded-2xl border border-line/50 overflow-hidden bg-inputBg focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15 shadow-inner">
+            <textarea 
+              v-if="selectedPromptBlock"
+              v-model="selectedPromptBlock.text" 
+              placeholder="請輸入提示詞內容..."
+              class="w-full h-full p-4 lg:p-6 text-sm bg-transparent border-0 focus:ring-0 focus:outline-none font-mono resize-none leading-relaxed custom-scrollbar"
+            ></textarea>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
     <!-- 究極質感自定義模態彈窗 (Alert / Confirm / Prompt) -->
     <Transition name="fade">
-      <div v-if="modalState.show" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div v-if="modalState.show" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]">
         <div class="glass-panel w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-line/45 transform transition-all scale-100 p-6 flex flex-col gap-4 animate-[scale-up_0.2s_ease-out]">
           
           <!-- Modal Header -->
@@ -2565,6 +2645,13 @@ onMounted(async () => {
       <!-- icon: chevron-down -->
       <symbol id="icon-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="6 9 12 15 18 9"/>
+      </symbol>
+      <!-- icon: expand -->
+      <symbol id="icon-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="15 3 21 3 21 9"/>
+        <polyline points="9 21 3 21 3 15"/>
+        <line x1="21" y1="3" x2="14" y2="10"/>
+        <line x1="3" y1="21" x2="10" y2="14"/>
       </symbol>
     </svg>
 
