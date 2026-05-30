@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./web/**/*.{html,js,vue}",
@@ -9,16 +10,24 @@ export default {
     extend: {
       colors: {
         brand: {
-          DEFAULT: '#b0562d',
-          soft: '#fff0e6',
+          DEFAULT: 'var(--brand)',
+          soft: 'var(--brand-soft)',
         },
         bg: {
-          DEFAULT: '#f5f0e7',
-          soft: '#fbf8f2',
+          DEFAULT: 'var(--bg)',
+          soft: 'var(--bg-soft)',
         },
-        line: '#d9ccbb',
-        text: '#2b2520',
-        muted: '#7f6d5c',
+        line: 'var(--line)',
+        text: 'var(--text)',
+        muted: 'var(--muted)',
+        panel: 'var(--panel-bg)',
+        panelBorder: 'var(--panel-border)',
+        inputBg: 'var(--input-bg)',
+        cardHover: 'var(--card-hover)',
+      },
+      fontFamily: {
+        sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', '"Liberation Mono"', '"Courier New"', 'monospace'],
       }
     },
   },

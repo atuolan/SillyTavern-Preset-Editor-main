@@ -82,7 +82,103 @@ const activeTab = ref('prompts'); // 'prompts' | 'regex' | 'api'
 const mobileSubTab = ref('edit'); // 'edit' | 'preview' (用於提示詞分頁的手機版)
 const mobileRegexSubTab = ref('list'); // 'list' | 'edit' (用於正則分頁的手機版)
 const mobilePromptDrawerOpen = ref(false);
+const mobileMenuOpen = ref(false);
 const promptSearchCursor = ref(0);
+
+const isDark = ref(false);
+const editorScrollTop = ref(0);
+const modalInputRef = ref(null);
+const modalState = ref({
+  show: false,
+  type: 'alert',
+  title: '',
+  message: '',
+  placeholder: '',
+  inputValue: '',
+  resolve: null,
+  reject: null
+});
+
+function customAlert(message, title = "系統提示") {
+  return new Promise((resolve) => {
+    modalState.value = {
+      show: true,
+      type: 'alert',
+      title,
+      message,
+      placeholder: '',
+      inputValue: '',
+      resolve: () => {
+        modalState.value.show = false;
+        resolve();
+      },
+      reject: () => {
+        modalState.value.show = false;
+        resolve();
+      }
+    };
+  });
+}
+
+function customConfirm(message, title = "確認執行") {
+  return new Promise((resolve) => {
+    modalState.value = {
+      show: true,
+      type: 'confirm',
+      title,
+      message,
+      placeholder: '',
+      inputValue: '',
+      resolve: () => {
+        modalState.value.show = false;
+        resolve(true);
+      },
+      reject: () => {
+        modalState.value.show = false;
+        resolve(false);
+      }
+    };
+  });
+}
+
+function customPrompt(message, defaultValue = "", placeholder = "", title = "需要輸入") {
+  return new Promise((resolve) => {
+    modalState.value = {
+      show: true,
+      type: 'prompt',
+      title,
+      message,
+      placeholder,
+      inputValue: defaultValue,
+      resolve: () => {
+        modalState.value.show = false;
+        resolve(modalState.value.inputValue);
+      },
+      reject: () => {
+        modalState.value.show = false;
+        resolve(null);
+      }
+    };
+  });
+}
+
+const alert = (msg) => customAlert(msg);
+const confirm = (msg) => customConfirm(msg);
+const prompt = (msg, def = "") => customPrompt(msg, def);
+
+function toggleTheme() {
+  isDark.value = !isDark.value;
+  localStorage.setItem('theme', isDark.value ? 'dark' : 'light');
+  if (isDark.value) {
+    document.documentElement.classList.add('dark');
+  } else {
+    document.documentElement.classList.remove('dark');
+  }
+}
+
+function handleEditorScroll(event) {
+  editorScrollTop.value = event.target.scrollTop;
+}
 const promptDragIndex = ref(null);
 const promptTouchDrag = ref(null);
 const promptEdgeTouchStart = ref(null);
@@ -622,7 +718,7 @@ async function saveProjectToLocalLibrary() {
 async function renameCurrentProject() {
   if (!doc.value || isLocalProjectBusy.value) return;
   const currentTitle = doc.value.title || "未命名工程";
-  const nextTitle = (window.prompt("請輸入工程名稱", currentTitle) || "").trim();
+  const nextTitle = (await prompt("請輸入工程名稱", currentTitle) || "").trim();
   if (!nextTitle || nextTitle === currentTitle) return;
   doc.value.title = nextTitle;
   fileName.value = `${nextTitle}.project.json`;
@@ -683,7 +779,7 @@ async function deleteCurrentLocalProject() {
   if (!currentLocalProjectId.value || isLocalProjectBusy.value) return;
   const selected = localProjects.value.find(project => project.id === currentLocalProjectId.value);
   const label = selected?.title || doc.value?.title || "目前工程";
-  if (!window.confirm(`確定要從本機工程庫刪除「${label}」嗎？目前畫面內容會保留，但工程庫紀錄會被移除。`)) return;
+  if (!(await confirm(`確定要從本機工程庫刪除「${label}」嗎？目前畫面內容會保留，但工程庫紀錄會被移除。`))) return;
   isLocalProjectBusy.value = true;
   try {
     const deletedId = currentLocalProjectId.value;
@@ -737,14 +833,14 @@ function downloadExportFile() {
 }
 
 // 配置組操作
-function addProfile() {
+async function addProfile() {
   if (!doc.value) return;
-  const rawValue = window.prompt("請輸入新的配置組ID（character_id）。留空將自動分配。", "");
+  const rawValue = await prompt("請輸入新的配置組ID（character_id）。留空將自動分配。", "");
   if (rawValue == null) return;
 
   const parsed = parseProfileIdInput(rawValue);
   if (!parsed.ok) {
-    alert(parsed.message);
+    await alert(parsed.message);
     return;
   }
 
@@ -760,14 +856,14 @@ function addProfile() {
   selectedPromptId.value = newProfile.order[0]?.blockId ?? null;
 
   if (parsed.autoAssigned) {
-    alert(`已自動分配配置組ID：${newProfile.characterId}`);
+    await alert(`已自動分配配置組ID：${newProfile.characterId}`);
   }
 }
 
-function editActiveProfileId() {
+async function editActiveProfileId() {
   if (!doc.value || !activeProfile.value) return;
 
-  const rawValue = window.prompt(
+  const rawValue = await prompt(
     `當前配置組ID：${activeProfile.value.characterId}\n請輸入新的配置組ID（留空自動分配）。`,
     String(activeProfile.value.characterId)
   );
@@ -775,7 +871,7 @@ function editActiveProfileId() {
 
   const parsed = parseProfileIdInput(rawValue, activeProfile.value.characterId);
   if (!parsed.ok) {
-    alert(parsed.message);
+    await alert(parsed.message);
     return;
   }
 
@@ -784,25 +880,25 @@ function editActiveProfileId() {
   selectedProfileId.value = parsed.characterId;
 
   if (parsed.autoAssigned) {
-    alert(`已自動分配新的配置組ID：${parsed.characterId}`);
+    await alert(`已自動分配新的配置組ID：${parsed.characterId}`);
   }
 }
 
-function deleteActiveProfile() {
+async function deleteActiveProfile() {
   if (!doc.value || !activeProfile.value) return;
   if (doc.value.profiles.length <= 1) {
-    alert("至少需要保留一個配置組，無法刪除最後一個。");
+    await alert("至少需要保留一個配置組，無法刪除最後一個。");
     return;
   }
 
   const total = activeProfile.value.order.length;
   const enabled = activeProfile.value.order.filter(entry => entry.enabled).length;
-  const firstConfirm = window.confirm(
+  const firstConfirm = await confirm(
     `即將刪除配置組 ${activeProfile.value.characterId}（啟用 ${enabled}/${total}）。\n該配置組包含完整提示詞順序信息，刪除後不可恢復。\n是否繼續？`
   );
   if (!firstConfirm) return;
 
-  const secondConfirm = window.confirm(`請再次確認：刪除配置組 ${activeProfile.value.characterId}。`);
+  const secondConfirm = await confirm(`請再次確認：刪除配置組 ${activeProfile.value.characterId}。`);
   if (!secondConfirm) return;
 
   const activeIndex = doc.value.profiles.findIndex(
@@ -989,14 +1085,14 @@ function movePromptTo(index, targetIndex) {
   order.splice(finalIndex, 0, moved);
 }
 
-function movePromptToPosition(index) {
+async function movePromptToPosition(index) {
   if (!canReorderPrompts()) return;
   const total = activeProfile.value.order.length;
-  const raw = window.prompt(`移動到第幾個位置？請輸入 1-${total}`, String(index + 1));
+  const raw = await prompt(`移動到第幾個位置？請輸入 1-${total}`, String(index + 1));
   if (raw == null) return;
   const position = Number(raw.trim());
   if (!Number.isInteger(position) || position < 1 || position > total) {
-    alert(`位置必須是 1-${total} 的整數。`);
+    await alert(`位置必須是 1-${total} 的整數。`);
     return;
   }
   movePromptTo(index, position - 1);
@@ -1284,12 +1380,12 @@ function exportSelectedRegexFiles() {
 }
 
 // API 配置操作
-function addApiSetting() {
+async function addApiSetting() {
   if (!doc.value) return;
-  const key = (window.prompt("請輸入配置鍵（例如：temperature，表示採樣溫度）") || "").trim();
+  const key = (await prompt("請輸入配置鍵（例如：temperature，表示採樣溫度）") || "").trim();
   if (!key) return;
   if (Object.prototype.hasOwnProperty.call(doc.value.apiSettings, key)) {
-    alert(`配置已存在：${key}`);
+    await alert(`配置已存在：${key}`);
     return;
   }
   doc.value.apiSettings[key] = "";
@@ -1341,7 +1437,24 @@ watch(selectedRegexIds, () => {
   scheduleAutoSave();
 }, { deep: true });
 
+watch(() => modalState.value.show, (newVal) => {
+  if (newVal && modalState.value.type === 'prompt') {
+    nextTick(() => {
+      modalInputRef.value?.focus();
+    });
+  }
+});
+
 onMounted(async () => {
+  const savedTheme = localStorage.getItem('theme');
+  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    isDark.value = true;
+    document.documentElement.classList.add('dark');
+  } else {
+    isDark.value = false;
+    document.documentElement.classList.remove('dark');
+  }
+
   createNewProject();
   try {
     await refreshLocalProjects();
@@ -1352,164 +1465,268 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-text font-sans antialiased">
+  <div class="flex flex-col h-[100dvh] w-screen overflow-hidden bg-bg text-text font-sans antialiased relative">
+    <!-- Ambient Neon Glowing Background -->
+    <div class="absolute inset-0 overflow-hidden pointer-events-none z-0 opacity-40 dark:opacity-30">
+      <div class="absolute top-[10%] left-[20%] w-[45vw] h-[45vw] rounded-full bg-brand/10 blur-[100px] animate-float-1"></div>
+      <div class="absolute bottom-[10%] right-[20%] w-[35vw] h-[35vw] rounded-full bg-brand/5 blur-[80px] animate-float-2"></div>
+    </div>
+
     <!-- 頂部導航欄 -->
-    <header class="flex flex-col lg:flex-row items-center justify-between px-4 py-3 bg-bg-soft border-b border-line shadow-sm shrink-0 gap-3 lg:gap-0">
-      <div class="flex items-center gap-3">
-        <div class="flex items-center justify-center w-10 h-10 rounded-xl bg-brand text-white font-bold text-lg shadow-md shadow-brand/20">
+    <header class="glass-panel backdrop-blur-md sticky top-0 z-30 flex flex-col lg:flex-row items-center justify-between px-4 py-3 bg-bg-soft/40 border-b border-line/30 shadow-sm shrink-0 gap-3 lg:gap-0">
+      <!-- Logo + Title -->
+      <div class="flex items-center gap-2">
+        <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-brand text-white font-bold text-base shadow-sm shadow-brand/20">
           酒
         </div>
         <div>
-          <h1 class="text-lg font-bold tracking-wide text-brand flex items-center gap-2">
+          <h1 class="text-sm font-bold tracking-wide text-brand flex items-center gap-1.5 leading-none">
             酒館預設編輯器
-            <span class="text-xs font-normal px-2 py-0.5 rounded-full bg-brand/10 text-brand">{{ APP_VERSION }}</span>
+            <span class="text-[9px] font-normal px-1.5 py-0.5 rounded-full bg-brand/10 text-brand">{{ APP_VERSION }}</span>
           </h1>
-          <p class="text-xs text-muted mt-0.5">SillyTavern Preset Editor</p>
+          <p class="text-[9px] text-muted font-medium mt-0.5 leading-none lg:block hidden">SillyTavern Preset Editor</p>
+          <!-- Show short filename on mobile under title -->
+          <p class="text-[9px] text-muted font-medium mt-0.5 leading-none lg:hidden truncate max-w-[140px]" :title="fileName || '未加載'">
+            {{ fileName || '未加載' }}
+          </p>
         </div>
       </div>
 
-      <!-- 頂部操作按鈕 -->
-      <div class="flex flex-col gap-2 w-full lg:w-auto lg:flex-row lg:items-center lg:justify-end">
-        <div class="grid grid-cols-2 gap-2 w-full lg:w-auto lg:flex lg:items-center lg:justify-end">
-          <span class="min-h-9 flex flex-col justify-center text-xs px-3 py-1.5 rounded-lg bg-line/40 border border-line text-muted font-medium truncate lg:max-w-[190px]" :title="fileName || '未加載'">
-            <span class="truncate">{{ fileName || '未加載' }}</span>
-            <span class="text-[10px] font-semibold" :class="autoSaveStatus === 'error' ? 'text-red-500' : autoSaveStatus === 'saving' || autoSaveStatus === 'pending' ? 'text-brand' : 'text-muted'">
-              {{ getAutoSaveStatusLabel() }}
-            </span>
+      <!-- Desktop Header Actions (Hidden on mobile) -->
+      <div class="hidden lg:flex flex-row items-center justify-end gap-2 z-10">
+        <span class="min-h-9 flex flex-col justify-center text-xs px-3 py-1.5 rounded-lg bg-line/20 border border-line/30 text-muted font-medium truncate max-w-[190px]" :title="fileName || '未加載'">
+          <span class="truncate">{{ fileName || '未加載' }}</span>
+          <span class="text-[10px] font-semibold" :class="autoSaveStatus === 'error' ? 'text-red-500' : autoSaveStatus === 'saving' || autoSaveStatus === 'pending' ? 'text-brand' : 'text-muted'">
+            {{ getAutoSaveStatusLabel() }}
           </span>
+        </span>
 
-          <select
-            :value="currentLocalProjectId || ''"
-            :disabled="isLocalProjectBusy || localProjects.length === 0"
-            @change="handleLocalProjectSelect"
-            class="min-h-9 w-full px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg transition-all shadow-sm lg:w-[180px]"
-            title="切換本機工程庫中的工程"
-          >
-            <option value="">本機工程庫</option>
-            <option v-for="project in localProjects" :key="project.id" :value="project.id">
-              {{ project.title }}
-            </option>
-          </select>
-        </div>
+        <select
+          :value="currentLocalProjectId || ''"
+          :disabled="isLocalProjectBusy || localProjects.length === 0"
+          @change="handleLocalProjectSelect"
+          class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-inputBg border border-line/50 hover:bg-bg transition-all shadow-sm w-[180px]"
+          title="切換本機工程庫中的工程"
+        >
+          <option value="">本機工程庫</option>
+          <option v-for="project in localProjects" :key="project.id" :value="project.id">
+            {{ project.title }}
+          </option>
+        </select>
         
         <input type="file" ref="fileInputRef" accept=".json" class="hidden" @change="handleFileChange" />
         
-        <div class="grid grid-cols-3 gap-2 w-full lg:w-auto lg:flex lg:items-center lg:justify-end">
-          <button @click="triggerFileInput" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center justify-center gap-1">
-            <svg class="w-3.5 h-3.5"><use href="#icon-folder-open" /></svg> 導入
+        <button @click="triggerFileInput" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm flex items-center justify-center gap-1">
+          <svg class="w-3.5 h-3.5"><use href="#icon-folder-open" /></svg> 導入
+        </button>
+        <button @click="createNewProject" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm flex items-center justify-center gap-1">
+          <svg class="w-3.5 h-3.5"><use href="#icon-sparkles" /></svg> 新建
+        </button>
+        <button @click="renameCurrentProject" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg glass-card hover:text-brand hover:border-brand/40 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+          改名
+        </button>
+        <button @click="saveProjectFile" :disabled="!isDocLoaded" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 hover:shadow-lg hover:shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+          <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 下載工程
+        </button>
+        <button @click="saveProjectToLocalLibrary" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 hover:shadow-lg hover:shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+          <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 保存本機
+        </button>
+        <button @click="deleteCurrentLocalProject" :disabled="!currentLocalProjectId || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg glass-card hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/40 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
+          刪除本機
+        </button>
+
+        <div class="flex gap-1">
+          <button @click="toggleTheme" class="min-h-9 min-w-9 p-1.5 text-xs rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm flex items-center justify-center text-muted" :title="isDark ? '切換為舒適淺色主題' : '切換為午夜深色主題'">
+            <svg v-if="isDark" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m0-12.728l.707.707m12.728 12.728l.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z"/>
+            </svg>
+            <svg v-else class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+            </svg>
           </button>
-          <button @click="createNewProject" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center justify-center gap-1">
-            <svg class="w-3.5 h-3.5"><use href="#icon-sparkles" /></svg> 新建
+          <button @click="openDocs" class="min-h-9 min-w-9 p-1.5 text-xs rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm flex items-center justify-center" title="查看文檔">
+            <svg class="w-3.5 h-3.5"><use href="#icon-question-circle" /></svg>
           </button>
-          <button @click="renameCurrentProject" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-bg hover:text-brand disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
-            改名
-          </button>
-          <button @click="saveProjectFile" :disabled="!isDocLoaded" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
-            <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 下載工程
-          </button>
-          <button @click="saveProjectToLocalLibrary" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
-            <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 保存本機
-          </button>
-          <div class="grid grid-cols-[1fr_auto] gap-2 lg:flex lg:items-center">
-            <button @click="deleteCurrentLocalProject" :disabled="!currentLocalProjectId || isLocalProjectBusy" class="min-h-9 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-line hover:bg-red-50 hover:text-red-600 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center justify-center gap-1">
-              刪除本機
-            </button>
-            <button @click="openDocs" class="min-h-9 min-w-9 p-1.5 text-xs rounded-lg border border-line hover:bg-bg transition-all shadow-sm flex items-center justify-center" title="查看文檔">
-              <svg class="w-3.5 h-3.5"><use href="#icon-question-circle" /></svg>
-            </button>
-          </div>
         </div>
       </div>
+
+      <!-- Mobile Header Actions & Menu Button (Visible on mobile) -->
+      <div class="lg:hidden flex items-center justify-end w-full lg:w-auto gap-1.5 z-20">
+        <!-- Theme Toggle -->
+        <button @click="toggleTheme" class="w-8 h-8 rounded-lg glass-card hover:text-brand transition-all flex items-center justify-center text-muted">
+          <svg v-if="isDark" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m0-12.728l.707.707m12.728 12.728l.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z"/>
+          </svg>
+          <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+          </svg>
+        </button>
+
+        <!-- Docs -->
+        <button @click="openDocs" class="w-8 h-8 rounded-lg glass-card hover:text-brand transition-all flex items-center justify-center text-muted">
+          <svg class="w-4 h-4"><use href="#icon-question-circle" /></svg>
+        </button>
+
+        <!-- Hamburger Menu Button -->
+        <button 
+          @click="mobileMenuOpen = !mobileMenuOpen" 
+          class="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center transition-all hover:bg-brand/90 focus:outline-none"
+        >
+          <svg v-if="!mobileMenuOpen" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+          <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Mobile Dropdown Actions Menu -->
+      <Transition name="fade">
+        <div v-if="mobileMenuOpen" class="fixed inset-0 z-40 bg-black/20 lg:hidden" @click="mobileMenuOpen = false"></div>
+      </Transition>
+      <Transition name="fade">
+        <div 
+          v-if="mobileMenuOpen" 
+          class="lg:hidden absolute top-full left-0 right-0 z-50 glass-panel shadow-2xl flex flex-col p-4 gap-3.5 animate-[scale-up_0.15s_ease-out]"
+        >
+          <!-- Project Status & Selection -->
+          <div class="flex flex-col gap-2">
+            <div class="flex items-center justify-between text-xs font-semibold text-muted">
+              <span>當前檔案</span>
+              <span :class="autoSaveStatus === 'error' ? 'text-red-500' : 'text-brand'">{{ getAutoSaveStatusLabel() }}</span>
+            </div>
+            <select
+              :value="currentLocalProjectId || ''"
+              :disabled="isLocalProjectBusy || localProjects.length === 0"
+              @change="handleLocalProjectSelect"
+              class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg bg-inputBg border border-line/50 hover:bg-bg transition-all w-full"
+            >
+              <option value="">本機工程庫 (無選擇)</option>
+              <option v-for="project in localProjects" :key="project.id" :value="project.id">
+                {{ project.title }}
+              </option>
+            </select>
+          </div>
+
+          <!-- Buttons Group 1: File Actions -->
+          <div class="grid grid-cols-3 gap-2">
+            <button @click="triggerFileInput(); mobileMenuOpen = false" class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg glass-card flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5"><use href="#icon-folder-open" /></svg> 導入
+            </button>
+            <button @click="createNewProject(); mobileMenuOpen = false" class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg glass-card flex items-center justify-center gap-1.5">
+              <svg class="w-3.5 h-3.5"><use href="#icon-sparkles" /></svg> 新建
+            </button>
+            <button @click="renameCurrentProject(); mobileMenuOpen = false" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg glass-card flex items-center justify-center gap-1.5 disabled:opacity-40">
+              改名
+            </button>
+          </div>
+
+          <!-- Buttons Group 2: Save & Backup Actions -->
+          <div class="grid grid-cols-2 gap-2">
+            <button @click="saveProjectFile(); mobileMenuOpen = false" :disabled="!isDocLoaded" class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg bg-brand text-white flex items-center justify-center gap-1.5 disabled:opacity-40">
+              <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 下載工程
+            </button>
+            <button @click="saveProjectToLocalLibrary(); mobileMenuOpen = false" :disabled="!isDocLoaded || isLocalProjectBusy" class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg bg-brand text-white flex items-center justify-center gap-1.5 disabled:opacity-40">
+              <svg class="w-3.5 h-3.5"><use href="#icon-floppy-disk" /></svg> 保存本機
+            </button>
+          </div>
+
+          <button @click="deleteCurrentLocalProject(); mobileMenuOpen = false" :disabled="!currentLocalProjectId || isLocalProjectBusy" class="min-h-10 px-3 py-2 text-xs font-semibold rounded-lg border border-red-500/30 text-red-500 bg-red-500/5 hover:bg-red-500/10 flex items-center justify-center gap-1.5 disabled:opacity-40">
+            <svg class="w-3.5 h-3.5"><use href="#icon-trash" /></svg> 刪除此本機備份
+          </button>
+        </div>
+      </Transition>
     </header>
 
     <!-- 主分頁切換標籤 -->
-    <nav class="flex border-b border-line bg-white shrink-0 px-4">
+    <nav class="flex border-b border-line/20 bg-white/10 dark:bg-black/10 backdrop-blur-sm shrink-0 px-4 z-10 relative">
       <button 
         @click="activeTab = 'prompts'" 
-        :class="['px-5 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2', activeTab === 'prompts' ? 'border-brand text-brand bg-brand-soft/30' : 'border-transparent text-muted hover:text-text hover:bg-bg/30']"
+        :class="['px-5 py-3.5 text-sm font-bold border-b-2 transition-all duration-200 flex items-center gap-2', activeTab === 'prompts' ? 'border-brand text-brand bg-brand/5 shadow-[inset_0_-2px_0_0_var(--brand)]' : 'border-transparent text-muted hover:text-text hover:bg-white/20 dark:hover:bg-white/5']"
       >
         <svg class="w-4 h-4"><use href="#icon-speech-bubble" /></svg> 提示詞預設
       </button>
       <button
         @click="activeTab = 'regex'"
-        :class="['px-5 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2', activeTab === 'regex' ? 'border-brand text-brand bg-brand-soft/30' : 'border-transparent text-muted hover:text-text hover:bg-bg/30']"
+        :class="['px-5 py-3.5 text-sm font-bold border-b-2 transition-all duration-200 flex items-center gap-2', activeTab === 'regex' ? 'border-brand text-brand bg-brand/5 shadow-[inset_0_-2px_0_0_var(--brand)]' : 'border-transparent text-muted hover:text-text hover:bg-white/20 dark:hover:bg-white/5']"
       >
         <svg class="w-4 h-4"><use href="#icon-magnifying-glass" /></svg> 正則過濾
       </button>
       <button
         @click="activeTab = 'api'"
-        :class="['px-5 py-3 text-sm font-bold border-b-2 transition-all flex items-center gap-2', activeTab === 'api' ? 'border-brand text-brand bg-brand-soft/30' : 'border-transparent text-muted hover:text-text hover:bg-bg/30']"
+        :class="['px-5 py-3.5 text-sm font-bold border-b-2 transition-all duration-200 flex items-center gap-2', activeTab === 'api' ? 'border-brand text-brand bg-brand/5 shadow-[inset_0_-2px_0_0_var(--brand)]' : 'border-transparent text-muted hover:text-text hover:bg-white/20 dark:hover:bg-white/5']"
       >
         <svg class="w-4 h-4"><use href="#icon-gear" /></svg> API 採樣配置
       </button>
     </nav>
 
     <!-- 主內容區域 -->
-    <main class="flex-1 min-height-0 overflow-hidden relative">
+    <main class="flex-1 min-height-0 overflow-hidden relative z-10 p-1.5 lg:p-3">
       
       <!-- 1. 提示詞預設分頁 -->
       <section
         v-show="activeTab === 'prompts'"
-        class="h-full flex flex-col"
+        class="h-full flex flex-col gap-1.5 lg:gap-3"
         @touchstart.passive="handlePromptEdgeTouchStart"
         @touchmove="handlePromptEdgeTouchMove"
         @touchend="handlePromptEdgeTouchEnd"
         @touchcancel="handlePromptEdgeTouchEnd"
       >
         <!-- 手機版子分頁切換欄：保留編輯/預覽，大列表改由左側抽屜開啟 -->
-        <div class="lg:hidden flex border-b border-line bg-bg-soft shrink-0">
+        <div class="lg:hidden flex border border-line/30 rounded-xl bg-bg-soft/70 backdrop-blur-sm shrink-0 overflow-hidden">
           <button
             @click="openPromptDrawer"
-            class="flex-1 py-3 text-xs font-bold border-b-2 border-transparent text-muted transition-all flex items-center justify-center gap-1.5"
+            class="flex-1 py-3 text-xs font-bold border-r border-line/30 text-muted hover:text-brand transition-all flex items-center justify-center gap-1.5"
           >
             <svg class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg> 列表 ({{ visiblePromptEntries.length }})
           </button>
           <button
             @click="mobileSubTab = 'edit'"
-            :class="['flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5', mobileSubTab === 'edit' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+            :class="['flex-1 py-3 text-xs font-bold border-r border-line/30 transition-all flex items-center justify-center gap-1.5', mobileSubTab === 'edit' ? 'text-brand bg-white/50 dark:bg-black/30' : 'text-muted']"
           >
             <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 編輯
           </button>
           <button
             @click="mobileSubTab = 'preview'"
-            :class="['flex-1 py-3 text-xs font-bold border-b-2 transition-all flex items-center justify-center gap-1.5', mobileSubTab === 'preview' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+            :class="['flex-1 py-3 text-xs font-bold transition-all flex items-center justify-center gap-1.5', mobileSubTab === 'preview' ? 'text-brand bg-white/50 dark:bg-black/30' : 'text-muted']"
           >
             <svg class="w-3.5 h-3.5"><use href="#icon-eye" /></svg> 預覽
           </button>
         </div>
 
-        <div
-          v-if="isMobile && mobilePromptDrawerOpen"
-          class="fixed inset-0 z-40 bg-black/30 lg:hidden"
-          @click="closePromptDrawer"
-        ></div>
-
         <!-- 提示詞佈局容器 -->
-        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 h-full min-h-0 overflow-hidden">
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 h-full min-h-0 gap-1.5 lg:gap-3 overflow-hidden">
           
           <!-- 1.1 提示詞列表面板 (lg:col-span-3) -->
-          <aside
-            v-show="mobilePromptDrawerOpen || !isMobile"
-            :class="[
-              'border-r border-line bg-white flex flex-col h-full min-h-0',
-              isMobile ? 'fixed inset-y-0 left-0 z-50 w-80 max-w-[86vw] shadow-2xl transition-transform duration-200' : 'lg:col-span-3',
-              isMobile && !mobilePromptDrawerOpen ? '-translate-x-full' : 'translate-x-0'
-            ]"
-          >
+          <Teleport to="body" :disabled="!isMobile">
+            <div
+              v-if="isMobile && mobilePromptDrawerOpen"
+              class="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm lg:hidden"
+              @click="closePromptDrawer"
+            ></div>
+            <aside
+              v-show="mobilePromptDrawerOpen || !isMobile"
+              :class="[
+                'glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden',
+                isMobile ? 'fixed inset-y-0 left-0 z-50 w-80 max-w-[86vw] shadow-2xl transition-transform duration-200 border-r border-line/20' : 'lg:col-span-3',
+                isMobile && !mobilePromptDrawerOpen ? '-translate-x-full' : 'translate-x-0'
+              ]"
+            >
             <!-- 配置組選擇與管理 -->
-            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 space-y-2">
+            <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 space-y-2">
               <div class="flex items-center justify-between">
                 <label class="text-xs font-bold text-muted">當前配置組 (character_id)</label>
-                <div class="flex gap-1">
-                  <button @click="addProfile" class="p-1 text-xs rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all" title="新增配置組"><svg class="w-3 h-3"><use href="#icon-plus-circle" /></svg></button>
-                  <button @click="editActiveProfileId" class="p-1 text-xs rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all" title="修改配置組ID"><svg class="w-3 h-3"><use href="#icon-pencil" /></svg></button>
-                  <button @click="deleteActiveProfile" class="p-1 text-xs rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all text-red-500" title="刪除配置組"><svg class="w-3 h-3"><use href="#icon-trash" /></svg></button>
+                <div class="flex gap-1.5">
+                  <button @click="addProfile" class="p-1 text-xs rounded-md border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all" title="新增配置組"><svg class="w-3 h-3"><use href="#icon-plus-circle" /></svg></button>
+                  <button @click="editActiveProfileId" class="p-1 text-xs rounded-md border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all" title="修改配置組ID"><svg class="w-3 h-3"><use href="#icon-pencil" /></svg></button>
+                  <button @click="deleteActiveProfile" class="p-1 text-xs rounded-md border border-line/50 bg-inputBg hover:border-red-500 hover:text-red-500 transition-all text-red-500/80" title="刪除配置組"><svg class="w-3 h-3"><use href="#icon-trash" /></svg></button>
                 </div>
               </div>
               <select 
                 v-model="selectedProfileId" 
                 @change="selectedPromptId = activeProfile?.order?.[0]?.blockId ?? null"
-                class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-line bg-white focus:outline-none focus:border-brand font-medium"
+                class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-line/60 bg-inputBg focus:outline-none focus:border-brand font-medium shadow-sm"
               >
                 <option v-for="p in doc?.profiles || []" :key="p.characterId" :value="p.characterId">
                   {{ p.characterId }} (啟用 {{ p.order.filter(e => e.enabled).length }}/{{ p.order.length }})
@@ -1518,54 +1735,57 @@ onMounted(async () => {
             </div>
 
             <!-- 搜索與新增提示詞 -->
-            <div class="p-3 border-b border-line shrink-0 space-y-2">
+            <div class="p-3 border-b border-line/20 shrink-0 space-y-2">
               <div class="flex items-center justify-between lg:hidden">
                 <span class="text-xs font-bold text-brand">提示詞列表</span>
-                <button @click="closePromptDrawer" class="min-h-9 px-3 text-xs font-semibold rounded-lg border border-line bg-white hover:bg-bg transition-all">
+                <button @click="closePromptDrawer" class="min-h-9 px-3 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand transition-all">
                   關閉
                 </button>
               </div>
-              <input
-                v-model="promptFilter"
-                type="text"
-                placeholder="搜索標題/ID/角色/內文/tag..."
-                class="w-full min-h-10 px-3 py-2 text-xs rounded-lg border border-line bg-bg focus:outline-none focus:border-brand"
-              />
-              <div v-if="hasPromptFilter" class="flex items-center gap-1.5 rounded-lg border border-line bg-bg-soft/50 p-1.5">
+              <div class="relative">
+                <input
+                  v-model="promptFilter"
+                  type="text"
+                  placeholder="搜索標題/ID/角色/內文/tag..."
+                  class="w-full min-h-10 pl-8 pr-3 py-2 text-xs rounded-lg border border-line/60 bg-inputBg focus:outline-none focus:border-brand"
+                />
+                <svg class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted/60"><use href="#icon-magnifying-glass" /></svg>
+              </div>
+              <div v-if="hasPromptFilter" class="flex items-center gap-1.5 rounded-lg border border-line/30 bg-bg-soft/40 p-1.5">
                 <button
                   @click="jumpPromptSearch(-1)"
                   :disabled="visiblePromptEntries.length === 0"
-                  class="min-h-9 px-2.5 text-xs font-semibold rounded border border-line bg-white hover:bg-bg disabled:opacity-50 transition-all"
+                  class="min-h-9 px-2.5 text-xs font-semibold rounded border border-line/50 bg-inputBg hover:border-brand disabled:opacity-50 transition-all"
                 >
                   上一筆
                 </button>
                 <button
                   @click="jumpPromptSearch(1)"
                   :disabled="visiblePromptEntries.length === 0"
-                  class="min-h-9 px-2.5 text-xs font-semibold rounded border border-line bg-white hover:bg-bg disabled:opacity-50 transition-all"
+                  class="min-h-9 px-2.5 text-xs font-semibold rounded border border-line/50 bg-inputBg hover:border-brand disabled:opacity-50 transition-all"
                 >
                   下一筆
                 </button>
                 <span class="ml-auto text-[11px] font-bold text-muted">{{ promptSearchSummary }}</span>
               </div>
-              <div v-if="hasPromptFilter" class="text-[10px] text-muted">
-                搜尋範圍包含標題、ID、角色、內文、meta 與 tag；搜尋中暫停排序以避免改錯真實順序。
+              <div v-if="hasPromptFilter" class="text-[10px] text-muted leading-tight">
+                搜尋中暫停排序，請清空搜尋後再排序以避免影響其他項目。
               </div>
-              <div class="grid grid-cols-3 gap-1">
-                <button @click="addPrompt" class="min-h-10 py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all flex items-center justify-center gap-1">
+              <div class="grid grid-cols-3 gap-1.5">
+                <button @click="addPrompt" class="min-h-10 py-1 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all flex items-center justify-center gap-1 shadow-sm">
                   <svg class="w-3.5 h-3.5"><use href="#icon-plus-circle" /></svg> 新增
                 </button>
-                <button @click="duplicatePrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-1">
+                <button @click="duplicatePrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-1 shadow-sm">
                   <svg class="w-3.5 h-3.5"><use href="#icon-users" /></svg> 複製
                 </button>
-                <button @click="deleteSelectedPrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-red-50 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-1">
+                <button @click="deleteSelectedPrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-red-500 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-1 shadow-sm">
                   <svg class="w-3.5 h-3.5"><use href="#icon-trash" /></svg> 刪除
                 </button>
               </div>
             </div>
 
             <!-- 提示詞滾動列表 -->
-            <div class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
+            <div class="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
               <div v-if="visiblePromptEntries.length === 0" class="text-center py-8 text-xs text-muted">
                 沒有匹配的提示詞
               </div>
@@ -1583,88 +1803,97 @@ onMounted(async () => {
                 @touchmove="handlePromptTouchDragMove"
                 @touchend="handlePromptTouchDragEnd"
                 @touchcancel="handlePromptTouchDragEnd"
-                :class="['group flex items-center gap-2 min-h-14 p-3 lg:min-h-0 lg:p-2.5 rounded-xl border cursor-pointer transition-all', promptDragIndex === index ? 'border-brand bg-brand-soft/70 shadow-md' : entry.blockId === selectedPromptId ? 'border-brand bg-brand-soft/40 shadow-sm' : 'border-line/60 hover:border-line hover:bg-bg/30']"
+                :class="['group flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative overflow-hidden', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98]' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-line/40 hover:border-brand/40 hover:bg-brand/5']"
               >
+                <!-- Selected Indicator Line -->
+                <div v-if="entry.blockId === selectedPromptId" class="absolute left-0 top-0 bottom-0 w-1 bg-brand"></div>
+
                 <!-- 啟用開關 -->
                 <input
                   type="checkbox"
                   v-model="entry.enabled"
                   @click.stopPropagation
-                  class="w-5 h-5 lg:w-4 lg:h-4 rounded border-line text-brand focus:ring-brand cursor-pointer shrink-0"
+                  class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer shrink-0 z-10"
                 />
                 
                 <!-- 標題與元數據 -->
                 <div class="flex-1 min-w-0">
-                  <div class="text-xs font-bold truncate" :class="entry.enabled ? 'text-text' : 'text-muted line-through'">
+                  <div class="text-xs font-bold truncate text-text" :class="entry.enabled ? '' : 'text-muted line-through opacity-60'">
                     {{ block?.title || `${entry.blockId} (缺失定義)` }}
                   </div>
-                  <div class="flex flex-wrap gap-1 mt-1">
-                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-line/50 text-muted font-mono">{{ entry.blockId }}</span>
-                    <span v-if="block?.role" class="text-[10px] px-1.5 py-0.5 rounded bg-brand/10 text-brand font-medium">
+                  <div class="flex flex-wrap gap-1 mt-1.5">
+                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-line/30 text-muted font-mono leading-none">{{ entry.blockId }}</span>
+                    <span v-if="block?.role" :class="['text-[9px] px-1.5 py-0.5 rounded font-medium leading-none', block.role === 'system' ? 'bg-brand/10 text-brand' : block.role === 'user' ? 'bg-blue-500/10 text-blue-500' : block.role === 'assistant' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-purple-500/10 text-purple-500']">
                       {{ formatPromptRole(block.role) }}
                     </span>
-                    <span v-if="block?.marker" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">
+                    <span v-if="block?.marker" class="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium leading-none">
                       標記塊
                     </span>
                   </div>
                 </div>
 
                 <!-- 排序操作 -->
-                <div class="grid grid-cols-2 gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:focus-within:opacity-100 transition-opacity shrink-0">
+                <div 
+                  :class="[
+                    'grid grid-cols-2 gap-1 transition-all shrink-0', 
+                    entry.blockId === selectedPromptId ? 'opacity-100 w-auto pointer-events-auto' : 'opacity-0 w-0 overflow-hidden pointer-events-none lg:w-auto lg:pointer-events-auto lg:group-hover:opacity-100 lg:focus-within:opacity-100'
+                  ]"
+                >
                   <button
                     @click.stopPropagation="movePromptTo(index, 0)"
                     :disabled="index === 0 || hasPromptFilter"
-                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30"
                     title="移到頂部"
                   >頂</button>
                   <button
                     @click.stopPropagation="movePrompt(index, -1)"
                     :disabled="index === 0 || hasPromptFilter"
-                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30 flex items-center justify-center"
                     title="上移"
                   >
-                    <svg class="w-3 h-3 mx-auto"><use href="#icon-chevron-up" /></svg>
+                    <svg class="w-3 h-3"><use href="#icon-chevron-up" /></svg>
                   </button>
                   <button
                     @click.stopPropagation="movePromptToPosition(index)"
                     :disabled="hasPromptFilter"
-                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30"
                     title="移到指定序號"
                   >序</button>
                   <button
                     @click.stopPropagation="movePrompt(index, 1)"
                     :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
-                    class="min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    class="min-h-7 px-1 text-[10px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30 flex items-center justify-center"
                     title="下移"
                   >
-                    <svg class="w-3 h-3 mx-auto"><use href="#icon-chevron-down" /></svg>
+                    <svg class="w-3 h-3"><use href="#icon-chevron-down" /></svg>
                   </button>
                   <button
                     @click.stopPropagation="movePromptTo(index, activeProfile.order.length - 1)"
                     :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
-                    class="col-span-2 min-h-7 px-1 text-[10px] rounded border border-line/70 bg-white hover:bg-line/50 disabled:opacity-30"
+                    class="col-span-2 min-h-7 px-1 text-[9px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30 leading-none"
                     title="移到底部"
                   >底 / 長按拖曳</button>
                 </div>
               </div>
             </div>
           </aside>
+        </Teleport>
 
           <!-- 1.2 提示詞編輯器面板 (lg:col-span-5) -->
           <section 
             v-show="mobileSubTab !== 'preview' || !isMobile"
-            class="lg:col-span-5 border-r border-line bg-white flex flex-col h-full min-h-0"
+            class="lg:col-span-5 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden"
           >
-            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 flex items-center justify-between gap-2">
+            <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 flex items-center justify-between gap-2">
               <div class="flex items-center gap-2">
-                <button @click="openPromptDrawer" class="lg:hidden min-h-9 px-3 text-xs font-semibold rounded-lg border border-line bg-white hover:bg-bg transition-all flex items-center gap-1">
+                <button @click="openPromptDrawer" class="lg:hidden min-h-9 px-3 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand transition-all flex items-center gap-1 shadow-sm">
                   <svg class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg> 列表
                 </button>
                 <h2 class="text-xs font-bold text-brand flex items-center gap-1.5">
                   <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 提示詞編輯器
                 </h2>
               </div>
-              <span v-if="selectedPromptBlock" class="text-[10px] font-mono text-muted bg-line/30 px-2 py-0.5 rounded">
+              <span v-if="selectedPromptBlock" class="text-[10px] font-mono text-muted bg-line/20 px-2 py-0.5 rounded">
                 ID: {{ selectedPromptBlock.id }}
               </span>
             </div>
@@ -1672,7 +1901,7 @@ onMounted(async () => {
             <!-- 編輯器主體 -->
             <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
               <div v-if="!selectedPromptBlock" class="h-full flex flex-col items-center justify-center text-center text-muted py-12">
-                <svg class="w-10 h-10 mb-2 text-muted/40"><use href="#icon-memo" /></svg>
+                <svg class="w-10 h-10 mb-2 text-muted/30"><use href="#icon-memo" /></svg>
                 <p class="text-xs">請在左側選擇或新增一個提示詞進行編輯</p>
               </div>
               
@@ -1685,7 +1914,7 @@ onMounted(async () => {
                       type="text" 
                       :value="selectedPromptBlock.id" 
                       @blur="handlePromptIdBlur"
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono shadow-sm"
                     />
                   </div>
                   <div class="space-y-1">
@@ -1693,7 +1922,7 @@ onMounted(async () => {
                     <input 
                       type="text" 
                       v-model="selectedPromptBlock.title" 
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand shadow-sm"
                     />
                   </div>
                 </div>
@@ -1704,7 +1933,7 @@ onMounted(async () => {
                     <label class="text-xs font-bold text-muted">角色 (Role)</label>
                     <select 
                       v-model="selectedPromptBlock.role" 
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line bg-white focus:outline-none focus:border-brand"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line bg-inputBg focus:outline-none focus:border-brand shadow-sm"
                     >
                       <option value="">未設置 (none)</option>
                       <option value="system">系統 (system)</option>
@@ -1717,25 +1946,36 @@ onMounted(async () => {
                     <label class="text-xs font-bold text-muted">狀態與屬性</label>
                     <div class="flex items-center gap-4 h-9 px-1">
                       <label class="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
-                        <input type="checkbox" v-model="selectedPromptBlock.marker" class="w-4 h-4 rounded border-line text-brand focus:ring-brand" />
+                        <input type="checkbox" v-model="selectedPromptBlock.marker" class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                         標記塊 (marker)
                       </label>
                       <label v-if="selectedPromptEntry" class="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
-                        <input type="checkbox" v-model="selectedPromptEntry.entry.enabled" class="w-4 h-4 rounded border-line text-brand focus:ring-brand" />
+                        <input type="checkbox" v-model="selectedPromptEntry.entry.enabled" class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                         啟用此項
                       </label>
                     </div>
                   </div>
                 </div>
 
-                <!-- 內容編輯區 -->
+                <!-- 內容編輯區 (IDE Look-alike with line numbers) -->
                 <div class="space-y-1 flex flex-col h-[calc(100vh-380px)] lg:h-[calc(100vh-320px)] min-h-[200px]">
                   <label class="text-xs font-bold text-muted shrink-0">提示詞內容 (Text)</label>
-                  <textarea 
-                    v-model="selectedPromptBlock.text" 
-                    placeholder="請輸入提示詞內容..."
-                    class="flex-1 w-full p-3 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono resize-none leading-relaxed custom-scrollbar"
-                  ></textarea>
+                  <div class="relative flex flex-1 rounded-xl border border-line/50 overflow-hidden bg-inputBg focus-within:border-brand focus-within:ring-2 focus-within:ring-brand/15 focus-within:shadow-[0_0_12px_rgba(176,86,45,0.08)]">
+                    <!-- Line numbers panel -->
+                    <div class="w-10 bg-bg-soft/40 dark:bg-black/20 border-r border-line/30 flex flex-col items-end pr-2.5 py-3 select-none text-[10px] font-mono text-muted/40 leading-relaxed overflow-hidden">
+                      <div :style="{ transform: `translateY(${-editorScrollTop}px)` }" class="transition-transform duration-75">
+                        <div v-for="n in Math.max(1, selectedPromptBlock.text.split('\n').length)" :key="n" class="h-5 flex items-center justify-end">{{ n }}</div>
+                      </div>
+                    </div>
+                    <!-- Editor Textarea -->
+                    <textarea 
+                      v-model="selectedPromptBlock.text" 
+                      placeholder="請輸入提示詞內容..."
+                      @scroll="handleEditorScroll"
+                      style="line-height: 20px;"
+                      class="flex-1 w-full p-3 text-xs bg-transparent border-0 focus:ring-0 focus:outline-none font-mono resize-none leading-relaxed custom-scrollbar h-full"
+                    ></textarea>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1744,15 +1984,15 @@ onMounted(async () => {
           <!-- 1.3 導出預覽面板 (lg:col-span-4) -->
           <section 
             v-show="mobileSubTab === 'preview' || !isMobile" 
-            class="lg:col-span-4 bg-white flex flex-col h-full min-h-0"
+            class="lg:col-span-4 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden"
           >
-            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 flex items-center justify-between">
+            <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 flex items-center justify-between">
               <h2 class="text-xs font-bold text-brand flex items-center gap-1.5">
                 <svg class="w-3.5 h-3.5"><use href="#icon-eye" /></svg> 導出預覽
               </h2>
               <div class="flex gap-1.5">
-                <button @click="copyExportText" class="px-2.5 py-1 text-xs font-semibold rounded bg-white border border-line hover:bg-bg hover:text-brand transition-all shadow-sm flex items-center gap-1">
-                  <svg v-if="copySuccess" class="w-3.5 h-3.5"><use href="#icon-checkmark-circle" /></svg>
+                <button @click="copyExportText" class="px-2.5 py-1 text-xs font-semibold rounded bg-inputBg border border-line/60 hover:text-brand hover:border-brand/40 transition-all shadow-sm flex items-center gap-1">
+                  <svg v-if="copySuccess" class="w-3.5 h-3.5 text-emerald-500"><use href="#icon-checkmark-circle" /></svg>
                   <svg v-else class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg>
                   {{ copySuccess ? '已複製' : '複製' }}
                 </button>
@@ -1763,18 +2003,18 @@ onMounted(async () => {
             </div>
 
             <!-- 導出配置選項 -->
-            <div class="p-3 border-b border-line shrink-0 space-y-2.5 bg-bg-soft/30">
+            <div class="p-3 border-b border-line/20 shrink-0 space-y-2.5 bg-bg-soft/20">
               <div class="grid grid-cols-2 gap-2">
                 <div class="space-y-1">
                   <label class="text-[10px] font-bold text-muted">導出格式</label>
-                  <select v-model="exportFormat" class="w-full px-2 py-1 text-xs rounded border border-line bg-white focus:outline-none focus:border-brand">
+                  <select v-model="exportFormat" class="w-full px-2 py-1 text-xs rounded border border-line/60 bg-inputBg focus:outline-none focus:border-brand">
                     <option value="txt">純文本 (TXT)</option>
                     <option value="json">酒館預設 (JSON)</option>
                   </select>
                 </div>
                 <div class="space-y-1">
                   <label class="text-[10px] font-bold text-muted">提示詞過濾</label>
-                  <select v-model="promptModeForCurrentFormat" class="w-full px-2 py-1 text-xs rounded border border-line bg-white focus:outline-none focus:border-brand">
+                  <select v-model="promptModeForCurrentFormat" class="w-full px-2 py-1 text-xs rounded border border-line/60 bg-inputBg focus:outline-none focus:border-brand">
                     <option v-if="exportFormat === 'txt'" value="enabled">僅啟用的提示詞</option>
                     <option v-if="exportFormat === 'txt'" value="all">所有提示詞</option>
                     <option v-if="exportFormat === 'json'" value="all">保留所有 (酒館標準)</option>
@@ -1786,16 +2026,16 @@ onMounted(async () => {
               <!-- 附加開關 -->
               <div class="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
                 <label v-if="exportFormat === 'txt'" class="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
-                  <input type="checkbox" v-model="includeEmpty" class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand" />
+                  <input type="checkbox" v-model="includeEmpty" class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                   包含空提示詞
                 </label>
                 <template v-if="exportFormat === 'json'">
                   <label class="flex items-center gap-1.5 text-xs font-medium cursor-pointer" :class="{'opacity-40 pointer-events-none': selectedRegexIds.size === 0}">
-                    <input type="checkbox" v-model="includeRegexInJson" :disabled="selectedRegexIds.size === 0" class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand" />
+                    <input type="checkbox" v-model="includeRegexInJson" :disabled="selectedRegexIds.size === 0" class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                     攜帶選中正則 ({{ selectedRegexIds.size }}條)
                   </label>
                   <label class="flex items-center gap-1.5 text-xs font-medium cursor-pointer">
-                    <input type="checkbox" v-model="includeApiInJson" class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand" />
+                    <input type="checkbox" v-model="includeApiInJson" class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                     攜帶 API 採樣配置
                   </label>
                 </template>
@@ -1803,12 +2043,12 @@ onMounted(async () => {
             </div>
 
             <!-- 預覽文本框 -->
-            <div class="flex-1 p-3 min-h-0">
+            <div class="flex-1 p-3 min-h-0 bg-bg-soft/10">
               <textarea 
                 readonly 
                 :value="exportOutput" 
                 placeholder="導出預覽區域..."
-                class="w-full h-full p-3 text-xs rounded-lg border border-line bg-bg-soft/50 font-mono resize-none focus:outline-none leading-relaxed custom-scrollbar"
+                class="w-full h-full p-3 text-xs rounded-lg border border-line/60 bg-bg-soft/40 font-mono resize-none focus:outline-none leading-relaxed custom-scrollbar dark:bg-black/20"
               ></textarea>
             </div>
           </section>
@@ -1817,69 +2057,72 @@ onMounted(async () => {
       </section>
 
       <!-- 2. 正則過濾分頁 -->
-      <section v-show="activeTab === 'regex'" class="h-full flex flex-col">
+      <section v-show="activeTab === 'regex'" class="h-full flex flex-col gap-1.5 lg:gap-3">
         <!-- 手機版子分頁切換欄 (僅在 lg 以下顯示) -->
-        <div class="lg:hidden flex border-b border-line bg-bg-soft shrink-0">
+        <div class="lg:hidden flex border border-line/30 rounded-xl bg-bg-soft/70 backdrop-blur-sm shrink-0 overflow-hidden">
           <button 
             @click="mobileRegexSubTab = 'list'" 
-            :class="['flex-1 py-2.5 text-xs font-bold border-b-2 transition-all', mobileRegexSubTab === 'list' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+            :class="['flex-1 py-3 text-xs font-bold border-r border-line/30 transition-all flex items-center justify-center gap-1.5', mobileRegexSubTab === 'list' ? 'text-brand bg-white/50 dark:bg-black/30' : 'text-muted']"
           >
             <svg class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg> 正則列表 ({{ visibleRegexItems.length }})
           </button>
           <button
             @click="mobileRegexSubTab = 'edit'"
-            :class="['flex-1 py-2.5 text-xs font-bold border-b-2 transition-all', mobileRegexSubTab === 'edit' ? 'border-brand text-brand bg-white' : 'border-transparent text-muted']"
+            :class="['flex-1 py-3 text-xs font-bold transition-all flex items-center justify-center gap-1.5', mobileRegexSubTab === 'edit' ? 'text-brand bg-white/50 dark:bg-black/30' : 'text-muted']"
           >
             <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 編輯正則 {{ selectedRegexItem ? `(${selectedRegexItem.script.scriptName || '未命名'})` : '' }}
           </button>
         </div>
 
         <!-- 正則佈局容器 -->
-        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 h-full min-h-0 overflow-hidden">
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 h-full min-h-0 gap-1.5 lg:gap-3 overflow-hidden">
           
           <!-- 2.1 正則列表面板 (lg:col-span-4) -->
           <aside 
             v-show="mobileRegexSubTab === 'list' || !isMobile" 
-            class="lg:col-span-4 border-r border-line bg-white flex flex-col h-full min-h-0"
+            class="lg:col-span-4 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden border border-line/20"
           >
             <!-- 搜索與操作 -->
-            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 space-y-2">
-              <input 
-                v-model="regexFilter" 
-                type="text" 
-                placeholder="搜索正則名稱/ID/表達式..."
-                class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-line bg-bg focus:outline-none focus:border-brand"
-              />
+            <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 space-y-2">
+              <div class="relative">
+                <input 
+                  v-model="regexFilter" 
+                  type="text" 
+                  placeholder="搜索正則名稱/ID/表達式..."
+                  class="w-full pl-8 pr-3 py-2 text-xs rounded-lg border border-line/60 bg-inputBg focus:outline-none focus:border-brand"
+                />
+                <svg class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted/60"><use href="#icon-magnifying-glass" /></svg>
+              </div>
               <input type="file" ref="regexFileInputRef" accept=".json" class="hidden" @change="handleRegexFileChange" />
-              <div class="grid grid-cols-4 gap-1">
-                <button @click="addRegex" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all flex items-center justify-center gap-1">
-                  <svg class="w-3.5 h-3.5"><use href="#icon-plus-circle" /></svg> 新增
+              <div class="grid grid-cols-4 gap-1.5">
+                <button @click="addRegex" class="py-1.5 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all flex items-center justify-center gap-0.5 shadow-sm">
+                  <svg class="w-3 h-3"><use href="#icon-plus-circle" /></svg> 新增
                 </button>
-                <button @click="triggerRegexFileInput" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand transition-all flex items-center justify-center gap-1">
-                  <svg class="w-3.5 h-3.5"><use href="#icon-folder-open" /></svg> 導入
+                <button @click="triggerRegexFileInput" class="py-1.5 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all flex items-center justify-center gap-0.5 shadow-sm">
+                  <svg class="w-3 h-3"><use href="#icon-folder-open" /></svg> 導入
                 </button>
-                <button @click="duplicateRegex" :disabled="!selectedRegexId" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-bg hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-1">
-                  <svg class="w-3.5 h-3.5"><use href="#icon-users" /></svg> 複製
+                <button @click="duplicateRegex" :disabled="!selectedRegexId" class="py-1.5 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-0.5 shadow-sm">
+                  <svg class="w-3 h-3"><use href="#icon-users" /></svg> 複製
                 </button>
-                <button @click="deleteRegex" :disabled="!selectedRegexId" class="py-1 text-xs font-semibold rounded border border-line bg-white hover:bg-red-50 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-1">
-                  <svg class="w-3.5 h-3.5"><use href="#icon-trash" /></svg> 刪除
+                <button @click="deleteRegex" :disabled="!selectedRegexId" class="py-1.5 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-red-500 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-0.5 shadow-sm">
+                  <svg class="w-3 h-3"><use href="#icon-trash" /></svg> 刪除
                 </button>
               </div>
               <div class="flex gap-1.5 pt-1">
-                <button @click="selectAllRegex" class="flex-1 py-1 text-[10px] font-medium rounded border border-line bg-white hover:bg-bg transition-all">
+                <button @click="selectAllRegex" class="flex-1 py-1 text-[10px] font-medium rounded-lg border border-line/50 bg-inputBg hover:border-brand transition-all shadow-sm">
                   全選導出
                 </button>
-                <button @click="clearRegexSelect" class="flex-1 py-1 text-[10px] font-medium rounded border border-line bg-white hover:bg-bg transition-all">
+                <button @click="clearRegexSelect" class="flex-1 py-1 text-[10px] font-medium rounded-lg border border-line/50 bg-inputBg hover:border-brand transition-all shadow-sm">
                   取消全選
                 </button>
-                <button @click="exportSelectedRegexFiles" :disabled="selectedRegexIds.size === 0" class="flex-1 py-1 text-[10px] font-bold rounded bg-brand text-white hover:bg-brand/90 disabled:opacity-50 transition-all flex items-center justify-center gap-0.5">
+                <button @click="exportSelectedRegexFiles" :disabled="selectedRegexIds.size === 0" class="flex-1 py-1 text-[10px] font-bold rounded-lg bg-brand text-white hover:bg-brand/90 disabled:opacity-50 hover:shadow-lg hover:shadow-brand/20 transition-all flex items-center justify-center gap-0.5 shadow-sm">
                   <svg class="w-3 h-3"><use href="#icon-package" /></svg> 獨立導出
                 </button>
               </div>
             </div>
 
             <!-- 正則滾動列表 -->
-            <div class="flex-1 overflow-y-auto p-2 space-y-1.5 custom-scrollbar">
+            <div class="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
               <div v-if="visibleRegexItems.length === 0" class="text-center py-8 text-xs text-muted">
                 沒有匹配的正則過濾器
               </div>
@@ -1887,33 +2130,36 @@ onMounted(async () => {
                 v-for="{ script } in visibleRegexItems" 
                 :key="script.id"
                 @click="selectRegex(script.id)"
-                :class="['flex items-center gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all', script.id === selectedRegexId ? 'border-brand bg-brand-soft/40 shadow-sm' : 'border-line/60 hover:border-line hover:bg-bg/30']"
+                :class="['flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative overflow-hidden', script.id === selectedRegexId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-line/40 hover:border-brand/40 hover:bg-brand/5']"
               >
+                <!-- Selected Indicator Line -->
+                <div v-if="script.id === selectedRegexId" class="absolute left-0 top-0 bottom-0 w-1 bg-brand"></div>
+
                 <!-- 導出勾選框 -->
                 <input 
                   type="checkbox" 
                   :checked="selectedRegexIds.has(script.id)" 
                   @change="toggleRegexExport(script.id)"
                   @click.stopPropagation 
-                  class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer"
+                  class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer z-10"
                   title="勾選以在 JSON 導出時攜帶此正則"
                 />
 
                 <!-- 啟用/停用狀態徽章 -->
                 <span 
-                  :class="['text-[10px] font-bold px-1.5 py-0.5 rounded shrink-0', script.disabled ? 'bg-line text-muted' : 'bg-emerald-100 text-emerald-700']"
+                  :class="['text-[9px] font-bold px-1.5 py-0.5 rounded-md shrink-0 leading-none', script.disabled ? 'bg-line/40 text-muted' : 'bg-emerald-500/10 text-emerald-500']"
                 >
-                  {{ script.disabled ? '停' : '啟' }}
+                  {{ script.disabled ? '停用' : '啟用' }}
                 </span>
                 
                 <!-- 標題與表達式 -->
                 <div class="flex-1 min-w-0">
-                  <div class="text-xs font-bold truncate text-text">
+                  <div class="text-xs font-bold truncate text-text" :class="script.disabled ? 'opacity-60' : ''">
                     {{ script.scriptName || '未命名正則' }}
                   </div>
-                  <div class="flex items-center gap-1.5 mt-1">
-                    <span class="text-[10px] px-1.5 py-0.5 rounded bg-line/50 text-muted font-mono truncate max-w-[80px]">{{ script.id }}</span>
-                    <span class="text-[10px] text-muted font-mono truncate flex-1">{{ script.findRegex }}</span>
+                  <div class="flex items-center gap-1.5 mt-1.5">
+                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-line/30 text-muted font-mono leading-none truncate max-w-[80px]">{{ script.id }}</span>
+                    <span class="text-[10px] text-muted font-mono truncate flex-1 leading-none">{{ script.findRegex }}</span>
                   </div>
                 </div>
               </div>
@@ -1923,13 +2169,13 @@ onMounted(async () => {
           <!-- 2.2 正則編輯器面板 (lg:col-span-8) -->
           <section 
             v-show="mobileRegexSubTab === 'edit' || !isMobile" 
-            class="lg:col-span-8 bg-white flex flex-col h-full min-h-0"
+            class="lg:col-span-8 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden border border-line/20"
           >
-            <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 flex items-center justify-between">
+            <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 flex items-center justify-between">
               <h2 class="text-xs font-bold text-brand flex items-center gap-1.5">
                 <svg class="w-3.5 h-3.5"><use href="#icon-pencil" /></svg> 正則編輯器
               </h2>
-              <span v-if="selectedRegexItem" class="text-[10px] font-mono text-muted bg-line/30 px-2 py-0.5 rounded">
+              <span v-if="selectedRegexItem" class="text-[10px] font-mono text-muted bg-line/20 px-2 py-0.5 rounded">
                 ID: {{ selectedRegexItem.script.id }}
               </span>
             </div>
@@ -1937,7 +2183,7 @@ onMounted(async () => {
             <!-- 編輯器主體 -->
             <div class="flex-1 overflow-y-auto p-4 custom-scrollbar">
               <div v-if="!selectedRegexItem" class="h-full flex flex-col items-center justify-center text-center text-muted py-12">
-                <svg class="w-10 h-10 mb-2 text-muted/40"><use href="#icon-magnifying-glass" /></svg>
+                <svg class="w-10 h-10 mb-2 text-muted/30"><use href="#icon-magnifying-glass" /></svg>
                 <p class="text-xs">請在左側選擇或新增一個正則過濾器進行編輯</p>
               </div>
               
@@ -1950,7 +2196,7 @@ onMounted(async () => {
                       type="text" 
                       :value="selectedRegexItem.script.id" 
                       @blur="handleRegexIdBlur"
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono shadow-sm"
                     />
                   </div>
                   <div class="space-y-1">
@@ -1958,7 +2204,7 @@ onMounted(async () => {
                     <input 
                       type="text" 
                       v-model="selectedRegexItem.script.scriptName" 
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand shadow-sm"
                     />
                   </div>
                 </div>
@@ -1971,7 +2217,7 @@ onMounted(async () => {
                       type="text" 
                       v-model="selectedRegexItem.script.findRegex" 
                       placeholder="/pattern/g"
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono shadow-sm"
                     />
                   </div>
                   <div class="space-y-1">
@@ -1979,7 +2225,7 @@ onMounted(async () => {
                     <input 
                       type="text" 
                       v-model="selectedRegexItem.script.replaceString" 
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono shadow-sm"
                     />
                   </div>
                 </div>
@@ -1993,7 +2239,7 @@ onMounted(async () => {
                       :value="Array.isArray(selectedRegexItem.script.trimStrings) ? selectedRegexItem.script.trimStrings.join(', ') : ''" 
                       @input="selectedRegexItem.script.trimStrings = $event.target.value.split(',').map(x => x.trim()).filter(Boolean)"
                       placeholder="例如: \n, \r"
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono shadow-sm"
                     />
                   </div>
                   <div class="space-y-1">
@@ -2003,7 +2249,7 @@ onMounted(async () => {
                       :value="Array.isArray(selectedRegexItem.script.placement) ? selectedRegexItem.script.placement.join(', ') : ''" 
                       @input="selectedRegexItem.script.placement = $event.target.value.split(',').map(x => Number(x.trim())).filter(x => Number.isFinite(x))"
                       placeholder="例如: 2 (酒館標準)"
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-mono shadow-sm"
                     />
                   </div>
                 </div>
@@ -2015,7 +2261,7 @@ onMounted(async () => {
                     <input 
                       type="number" 
                       v-model.number="selectedRegexItem.script.substituteRegex" 
-                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand"
+                      class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand shadow-sm"
                     />
                   </div>
                   <div class="space-y-1">
@@ -2025,13 +2271,13 @@ onMounted(async () => {
                         type="number" 
                         v-model.number="selectedRegexItem.script.minDepth" 
                         placeholder="最小層數"
-                        class="px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand"
+                        class="px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand shadow-sm"
                       />
                       <input 
                         type="number" 
                         v-model.number="selectedRegexItem.script.maxDepth" 
                         placeholder="最大層數"
-                        class="px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand"
+                        class="px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand shadow-sm"
                       />
                     </div>
                   </div>
@@ -2040,21 +2286,21 @@ onMounted(async () => {
                 <!-- 開關選項 -->
                 <div class="space-y-2 pt-2">
                   <label class="text-xs font-bold text-muted block">開關選項</label>
-                  <div class="flex flex-wrap gap-x-6 gap-y-3 p-3 rounded-xl border border-line bg-bg-soft/50">
+                  <div class="flex flex-wrap gap-x-6 gap-y-3 p-4 rounded-xl border border-line/45 bg-bg-soft/20 backdrop-blur-sm">
                     <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
-                      <input type="checkbox" v-model="selectedRegexItem.script.disabled" class="w-4 h-4 rounded border-line text-brand focus:ring-brand" />
+                      <input type="checkbox" v-model="selectedRegexItem.script.disabled" class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                       {{ REGEX_SWITCH_LABELS.disabled }}
                     </label>
                     <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
-                      <input type="checkbox" v-model="selectedRegexItem.script.markdownOnly" class="w-4 h-4 rounded border-line text-brand focus:ring-brand" />
+                      <input type="checkbox" v-model="selectedRegexItem.script.markdownOnly" class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                       {{ REGEX_SWITCH_LABELS.markdownOnly }}
                     </label>
                     <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
-                      <input type="checkbox" v-model="selectedRegexItem.script.promptOnly" class="w-4 h-4 rounded border-line text-brand focus:ring-brand" />
+                      <input type="checkbox" v-model="selectedRegexItem.script.promptOnly" class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                       {{ REGEX_SWITCH_LABELS.promptOnly }}
                     </label>
                     <label class="flex items-center gap-2 text-xs font-medium cursor-pointer">
-                      <input type="checkbox" v-model="selectedRegexItem.script.runOnEdit" class="w-4 h-4 rounded border-line text-brand focus:ring-brand" />
+                      <input type="checkbox" v-model="selectedRegexItem.script.runOnEdit" class="w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer" />
                       {{ REGEX_SWITCH_LABELS.runOnEdit }}
                     </label>
                   </div>
@@ -2067,18 +2313,18 @@ onMounted(async () => {
       </section>
 
       <!-- 3. API 採樣配置分頁 -->
-      <section v-show="activeTab === 'api'" class="h-full flex flex-col bg-white">
-        <div class="p-3 border-b border-line bg-bg-soft/50 shrink-0 flex items-center justify-between">
+      <section v-show="activeTab === 'api'" class="h-full flex flex-col glass-panel rounded-2xl shadow-sm overflow-hidden border border-line/20">
+        <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 flex items-center justify-between">
           <div class="flex items-center gap-3 flex-1 max-w-md">
             <h2 class="text-xs font-bold text-brand shrink-0 flex items-center gap-1.5"><svg class="w-3.5 h-3.5"><use href="#icon-gear" /></svg> API 採樣配置</h2>
             <input 
               v-model="apiFilter" 
               type="text" 
               placeholder="過濾配置項名稱..."
-              class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-line bg-white focus:outline-none focus:border-brand"
+              class="w-full px-2.5 py-1.5 text-xs rounded-lg border border-line/60 bg-inputBg focus:outline-none focus:border-brand"
             />
           </div>
-          <button @click="addApiSetting" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 transition-all shadow-sm flex items-center gap-1">
+          <button @click="addApiSetting" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 hover:shadow-lg hover:shadow-brand/20 hover:scale-[1.02] active:scale-[0.98] transition-all shadow-sm flex items-center gap-1">
             <svg class="w-3.5 h-3.5"><use href="#icon-plus-circle" /></svg> 新增配置項
           </button>
         </div>
@@ -2093,7 +2339,7 @@ onMounted(async () => {
             <div 
               v-for="item in apiSettingsList" 
               :key="item.key"
-              class="flex flex-col md:flex-row md:items-center gap-3 p-3.5 rounded-xl border border-line/60 bg-bg-soft/30 hover:bg-bg-soft/60 transition-all"
+              class="flex flex-col md:flex-row md:items-center gap-3 p-3.5 rounded-xl border border-line/50 bg-bg-soft/20 backdrop-blur-sm hover:bg-bg-soft/40 transition-all duration-200"
             >
               <!-- 鍵名與中文標籤 -->
               <div class="md:w-1/3 min-w-0">
@@ -2109,7 +2355,7 @@ onMounted(async () => {
               <select 
                 :value="item.type" 
                 @change="changeApiType(item.key, $event.target.value)"
-                class="w-24 px-2 py-1 text-xs rounded border border-line bg-white focus:outline-none focus:border-brand shrink-0"
+                class="w-24 px-2 py-1 text-xs rounded border border-line/60 bg-inputBg focus:outline-none focus:border-brand shrink-0 shadow-sm"
               >
                 <option value="string">文本</option>
                 <option value="number">數值</option>
@@ -2134,7 +2380,7 @@ onMounted(async () => {
                   :value="JSON.stringify(item.value, null, 2)"
                   @blur="handleApiJsonBlur(item.key, $event)"
                   rows="2"
-                  class="w-full p-2 text-xs rounded border border-line font-mono focus:outline-none focus:border-brand resize-y custom-scrollbar"
+                  class="w-full p-2 text-xs rounded border border-line/60 bg-inputBg font-mono focus:outline-none focus:border-brand resize-y custom-scrollbar shadow-sm"
                 ></textarea>
                 
                 <!-- 3. 數值或文本類型 -->
@@ -2143,14 +2389,14 @@ onMounted(async () => {
                   :type="item.type === 'number' ? 'number' : 'text'" 
                   v-model="doc.apiSettings[item.key]"
                   @input="doc.apiSettings[item.key] = parseValueByType(item.type, $event.target.value)"
-                  class="w-full px-3 py-1.5 text-xs rounded border border-line focus:outline-none focus:border-brand font-mono"
+                  class="w-full px-3 py-1.5 text-xs rounded border border-line/60 bg-inputBg focus:outline-none focus:border-brand font-mono shadow-sm"
                 />
               </div>
 
               <!-- 刪除按鈕 -->
               <button 
                 @click="removeApiSetting(item.key)" 
-                class="px-2.5 py-1.5 text-xs font-semibold rounded border border-line hover:bg-red-50 hover:text-red-500 transition-all shrink-0"
+                class="px-2.5 py-1.5 text-xs font-semibold rounded border border-line/50 bg-inputBg hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/40 transition-all shrink-0 shadow-sm"
               >
                 刪除
               </button>
@@ -2160,6 +2406,58 @@ onMounted(async () => {
       </section>
 
     </main>
+
+    <!-- 究極質感自定義模態彈窗 (Alert / Confirm / Prompt) -->
+    <Transition name="fade">
+      <div v-if="modalState.show" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div class="glass-panel w-full max-w-md rounded-2xl shadow-2xl overflow-hidden border border-line/45 transform transition-all scale-100 p-6 flex flex-col gap-4 animate-[scale-up_0.2s_ease-out]">
+          
+          <!-- Modal Header -->
+          <div class="flex items-center gap-3 border-b border-line/20 pb-3">
+            <div class="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center font-bold dark:bg-brand/20">
+              <svg v-if="modalState.type === 'alert'" class="w-5 h-5"><use href="#icon-question-circle" /></svg>
+              <svg v-else-if="modalState.type === 'confirm'" class="w-5 h-5"><use href="#icon-trash" /></svg>
+              <svg v-else class="w-5 h-5"><use href="#icon-pencil" /></svg>
+            </div>
+            <h3 class="text-sm font-bold text-text">{{ modalState.title }}</h3>
+          </div>
+
+          <!-- Modal Body -->
+          <div class="py-1 text-xs leading-relaxed text-text/80 break-words whitespace-pre-wrap">
+            {{ modalState.message }}
+          </div>
+
+          <!-- Prompt Input Field -->
+          <div v-if="modalState.type === 'prompt'" class="mt-1">
+            <input
+              type="text"
+              v-model="modalState.inputValue"
+              :placeholder="modalState.placeholder"
+              class="w-full px-3 py-2 text-xs rounded-lg border border-line focus:outline-none focus:border-brand font-sans bg-inputBg"
+              @keyup.enter="modalState.resolve"
+              ref="modalInputRef"
+            />
+          </div>
+
+          <!-- Modal Actions -->
+          <div class="flex items-center justify-end gap-2 mt-2 pt-3 border-t border-line/20">
+            <button
+              v-if="modalState.type !== 'alert'"
+              @click="modalState.reject"
+              class="min-h-9 px-4 py-1.5 text-xs font-semibold rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm bg-inputBg"
+            >
+              取消
+            </button>
+            <button
+              @click="modalState.resolve"
+              class="min-h-9 px-4 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 transition-all shadow-sm hover:shadow-lg hover:shadow-brand/20 hover:scale-[1.02] active:scale-[0.98]"
+            >
+              確認
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
     <!-- SVG 圖標精靈 -->
     <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
@@ -2282,10 +2580,31 @@ onMounted(async () => {
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #d9ccbb;
+  background: var(--line);
   border-radius: 3px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #b0562d;
+  background: var(--brand);
+}
+
+/* Modal Transitions */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease-out;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+@keyframes scale-up {
+  from {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 </style>
