@@ -181,8 +181,10 @@ function handleEditorScroll(event) {
   editorScrollTop.value = event.target.scrollTop;
 }
 const promptDragIndex = ref(null);
+const promptDropTargetIndex = ref(null);
 const promptTouchDrag = ref(null);
 const promptEdgeTouchStart = ref(null);
+const moveToPickerIndex = ref(null); // 指定移動目標的下拉選單索引
 
 const windowWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1024);
 if (typeof window !== 'undefined') {
@@ -221,6 +223,13 @@ const includeApiInJson = ref(false);
 const fileInputRef = ref(null);
 const regexFileInputRef = ref(null);
 const copySuccess = ref(false);
+const downloadProjectDialogOpen = ref(false);
+const downloadProjectOptions = ref({
+  format: 'sillytavern', // 'project' | 'sillytavern'
+  includeRegex: true,
+  includeApi: true,
+  promptMode: 'all' // 'all' | 'enabled'
+});
 
 const LOCAL_PROJECT_DB_NAME = "sillytavern-preset-editor";
 const LOCAL_PROJECT_DB_VERSION = 1;
@@ -667,26 +676,24 @@ async function loadInputFile(file) {
     throw new Error(`JSON 解析失敗：${String(err?.message || err)}`);
   }
 
+  let newDoc = null;
+
   if (detectSillyTavernApiPreset(data)) {
-    currentLocalProjectId.value = null;
-    setLoadedDoc(
-      importSillyTavernApiPreset({
-        data,
-        sourcePath: file.name,
-        title: file.name
-      }),
-      file.name
-    );
-    return;
+    newDoc = importSillyTavernApiPreset({
+      data,
+      sourcePath: file.name,
+      title: file.name
+    });
+  } else if (data && data.kind === "prompt-doc") {
+    newDoc = normalizeProjectDoc(data);
+  } else {
+    throw new Error("不支持的格式：僅支持 SillyTavern（酒館）API 預設 JSON 或本工具工程 JSON。");
   }
 
-  if (data && data.kind === "prompt-doc") {
-    currentLocalProjectId.value = null;
-    setLoadedDoc(normalizeProjectDoc(data), file.name);
-    return;
-  }
-
-  throw new Error("不支持的格式：僅支持 SillyTavern（酒館）API 預設 JSON 或本工具工程 JSON。");
+  // 將導入的檔案自動儲存到本機工程庫
+  currentLocalProjectId.value = null;
+  setLoadedDoc(newDoc, file.name);
+  await autoSaveProjectToLocalLibrary();
 }
 
 function handleFileChange(event) {
@@ -705,10 +712,51 @@ function triggerFileInput() {
 
 function saveProjectFile() {
   if (!doc.value) return;
-  doc.value.uiState = doc.value.uiState || {};
-  doc.value.uiState.selectedRegexIds = Array.from(selectedRegexIds.value);
-  const payload = JSON.stringify(doc.value, null, 2);
-  downloadFile(`${getBaseFileName()}.project.json`, payload, "application/json;charset=utf-8");
+  downloadProjectDialogOpen.value = true;
+}
+
+function doDownloadProjectFile() {
+  if (!doc.value || !activeProfile.value) return;
+  const opts = downloadProjectOptions.value;
+
+  if (opts.format === 'sillytavern') {
+    // 導出成可直接匹入酒館的 JSON
+    try {
+      const exportedJson = exportSillyTavernPresetJson(doc.value, {
+        characterId: activeProfile.value.characterId,
+        promptMode: opts.promptMode,
+        includeRegex: opts.includeRegex,
+        includeApiSettings: opts.includeApi,
+        selectedRegexIds: opts.includeRegex ? Array.from(selectedRegexIds.value) : []
+      });
+      const profileId = activeProfile.value.characterId;
+      downloadFile(
+        `${getBaseFileName()}-配置檔${profileId}.json`,
+        JSON.stringify(exportedJson, null, 2),
+        "application/json;charset=utf-8"
+      );
+    } catch (err) {
+      alert(`導出失敗：${String(err?.message || err)}`);
+    }
+  } else {
+    // 導出工程檔（可再載入編輯器）
+    const cloned = JSON.parse(JSON.stringify(doc.value));
+    cloned.uiState = cloned.uiState || {};
+    cloned.uiState.selectedRegexIds = Array.from(selectedRegexIds.value);
+    if (!opts.includeRegex) {
+      cloned.regexScripts = [];
+      cloned.uiState.selectedRegexIds = [];
+    }
+    if (!opts.includeApi) {
+      cloned.apiSettings = {};
+    }
+    downloadFile(
+      `${getBaseFileName()}.project.json`,
+      JSON.stringify(cloned, null, 2),
+      "application/json;charset=utf-8"
+    );
+  }
+  downloadProjectDialogOpen.value = false;
 }
 
 async function saveProjectToLocalLibrary() {
@@ -784,6 +832,8 @@ async function loadLocalProject(projectId) {
     }
     currentLocalProjectId.value = project.id;
     setLoadedDoc(project.doc, project.fileName || `${project.title || "未命名工程"}.project.json`);
+    // 記憶上次打開的工程
+    localStorage.setItem('lastProjectId', project.id);
   } catch (err) {
     alert(`載入本機工程失敗：${String(err?.message || err)}`);
   } finally {
@@ -1126,6 +1176,7 @@ async function movePromptToPosition(index) {
 function handlePromptDragStart(index, event) {
   if (!canReorderPrompts()) return;
   promptDragIndex.value = index;
+  promptDropTargetIndex.value = index;
   if (event?.dataTransfer) {
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", String(index));
@@ -1136,12 +1187,14 @@ function handlePromptDrop(targetIndex, event) {
   event?.preventDefault?.();
   const sourceIndex = promptDragIndex.value;
   promptDragIndex.value = null;
+  promptDropTargetIndex.value = null;
   if (sourceIndex == null) return;
   movePromptTo(sourceIndex, targetIndex);
 }
 
 function handlePromptDragEnd() {
   promptDragIndex.value = null;
+  promptDropTargetIndex.value = null;
 }
 
 function handlePromptTouchDragStart(index, event) {
@@ -1173,6 +1226,7 @@ function handlePromptTouchDragMove(event) {
   if (!state.activated && distance > 10) {
     clearTimeout(state.timer);
     promptTouchDrag.value = null;
+    promptDropTargetIndex.value = null;
     return;
   }
   if (!state.activated) return;
@@ -1180,7 +1234,10 @@ function handlePromptTouchDragMove(event) {
   const element = document.elementFromPoint(touch.clientX, touch.clientY);
   const row = element?.closest?.("[data-prompt-index]");
   const nextIndex = Number(row?.dataset?.promptIndex);
-  if (Number.isInteger(nextIndex)) state.currentIndex = nextIndex;
+  if (Number.isInteger(nextIndex)) {
+    state.currentIndex = nextIndex;
+    promptDropTargetIndex.value = nextIndex;
+  }
 }
 
 function handlePromptTouchDragEnd() {
@@ -1190,6 +1247,7 @@ function handlePromptTouchDragEnd() {
   if (state.activated) movePromptTo(state.index, state.currentIndex);
   promptTouchDrag.value = null;
   promptDragIndex.value = null;
+  promptDropTargetIndex.value = null;
 }
 
 function handlePromptEdgeTouchStart(event) {
@@ -1471,6 +1529,15 @@ watch(() => modalState.value.show, (newVal) => {
   }
 });
 
+// 當 currentLocalProjectId 變化時，記憶到 localStorage
+watch(currentLocalProjectId, (newId) => {
+  if (newId) {
+    localStorage.setItem('lastProjectId', newId);
+  } else {
+    localStorage.removeItem('lastProjectId');
+  }
+});
+
 onMounted(async () => {
   const savedTheme = localStorage.getItem('theme');
   if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
@@ -1481,17 +1548,28 @@ onMounted(async () => {
     document.documentElement.classList.remove('dark');
   }
 
-  createNewProject();
+  // 嘗試載入上次打開的工程
   try {
     await refreshLocalProjects();
+    const lastProjectId = localStorage.getItem('lastProjectId');
+    if (lastProjectId) {
+      const exists = localProjects.value.some(p => p.id === lastProjectId);
+      if (exists) {
+        await loadLocalProject(lastProjectId);
+        return; // 成功復原工程，跳過建立空白工程
+      }
+    }
   } catch (err) {
-    alert(`讀取本機工程庫失敗：${String(err?.message || err)}`);
+    console.warn('無法載入上次的工程', err);
   }
+
+  // 沒有上次紀錄，建立空白工程
+  createNewProject();
 });
 </script>
 
 <template>
-  <div class="flex flex-col h-[100dvh] w-screen overflow-hidden bg-bg text-text font-sans antialiased relative">
+  <div class="flex flex-col h-[100dvh] w-screen overflow-hidden bg-bg text-text font-sans antialiased relative" @click="moveToPickerIndex = null">
     <!-- Ambient Neon Glowing Background -->
     <div class="absolute inset-0 overflow-hidden pointer-events-none z-0 opacity-40 dark:opacity-30">
       <div class="absolute top-[10%] left-[20%] w-[45vw] h-[45vw] rounded-full bg-brand/10 blur-[100px] animate-float-1"></div>
@@ -1822,7 +1900,7 @@ onMounted(async () => {
                 :draggable="canDragSortPrompts"
                 @click="selectPrompt(entry.blockId)"
                 @dragstart="handlePromptDragStart(index, $event)"
-                @dragover.prevent
+                @dragover.prevent="promptDropTargetIndex = index"
                 @drop="handlePromptDrop(index, $event)"
                 @dragend="handlePromptDragEnd"
                 @contextmenu.prevent
@@ -1830,7 +1908,7 @@ onMounted(async () => {
                 @touchmove="handlePromptTouchDragMove"
                 @touchend="handlePromptTouchDragEnd"
                 @touchcancel="handlePromptTouchDragEnd"
-                :class="['group flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative overflow-hidden select-none', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98]' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-transparent hover:bg-line/20']"
+                :class="['group flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative select-none', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98] opacity-70' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-transparent hover:bg-line/20']"
               >
                 <!-- Selected Indicator Line -->
                 <div v-if="entry.blockId === selectedPromptId" class="absolute left-0 top-0 bottom-0 w-1 bg-brand"></div>
@@ -1859,8 +1937,14 @@ onMounted(async () => {
                   </div>
                 </div>
 
+                <!-- 拖曳放置指示線 -->
+                <div
+                  v-if="(promptDragIndex !== null || (promptTouchDrag && promptTouchDrag.activated)) && promptDropTargetIndex === index"
+                  class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand shadow-[0_0_6px_2px_rgba(176,86,45,0.5)] z-20 pointer-events-none"
+                ></div>
+
                 <!-- 排序操作 -->
-                <div class="grid grid-cols-2 gap-1 shrink-0">
+                <div class="grid grid-cols-2 gap-1 shrink-0 relative">
                   <button
                     @click.stopPropagation="movePromptTo(index, 0)"
                     :disabled="index === 0 || hasPromptFilter"
@@ -1875,12 +1959,38 @@ onMounted(async () => {
                   >
                     <svg class="w-3 h-3"><use href="#icon-chevron-up" /></svg>
                   </button>
-                  <button
-                    @click.stopPropagation="movePromptToPosition(index)"
-                    :disabled="hasPromptFilter"
-                    class="min-h-7 px-1 text-[10px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30"
-                    title="移到指定序號"
-                  >序</button>
+                  <!-- 移到指定標題下方選單 -->
+                  <div class="relative col-span-2">
+                    <button
+                      @click.stopPropagation="moveToPickerIndex = moveToPickerIndex === index ? null : index"
+                      :disabled="hasPromptFilter"
+                      class="w-full min-h-7 px-1 text-[10px] rounded border bg-inputBg disabled:opacity-30 flex items-center justify-center gap-1 transition-all"
+                      :class="moveToPickerIndex === index ? 'border-brand text-brand' : 'border-line/60 hover:border-brand'"
+                      title="移到指定條目的下方"
+                    >
+                      <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+                      移到…
+                    </button>
+                    <!-- 下拉選單 -->
+                    <div
+                      v-if="moveToPickerIndex === index"
+                      class="absolute right-0 bottom-full mb-1 z-50 w-48 max-h-52 overflow-y-auto rounded-xl border border-brand/40 bg-bg shadow-2xl custom-scrollbar"
+                      @click.stop
+                    >
+                      <div class="p-1 space-y-0.5">
+                        <div
+                          v-for="(target, ti) in visiblePromptEntries"
+                          :key="target.entry.blockId"
+                          @click.stop="movePromptTo(index, ti); moveToPickerIndex = null"
+                          class="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer text-[10px] transition-all"
+                          :class="ti === index ? 'opacity-40 pointer-events-none bg-line/20' : 'hover:bg-brand/10 hover:text-brand'"
+                        >
+                          <span class="w-4 text-right text-muted font-mono shrink-0">{{ ti + 1 }}</span>
+                          <span class="truncate font-medium">{{ target.block?.title || target.entry.blockId }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                   <button
                     @click.stopPropagation="movePrompt(index, 1)"
                     :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
@@ -1892,7 +2002,7 @@ onMounted(async () => {
                   <button
                     @click.stopPropagation="movePromptTo(index, activeProfile.order.length - 1)"
                     :disabled="index === activeProfile.order.length - 1 || hasPromptFilter"
-                    class="col-span-2 min-h-7 px-1 text-[9px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30 leading-none"
+                    class="min-h-7 px-1 text-[9px] rounded border border-line/60 bg-inputBg hover:border-brand disabled:opacity-30 leading-none"
                     title="移到底部"
                   >底</button>
                 </div>
@@ -2482,6 +2592,145 @@ onMounted(async () => {
               placeholder="請輸入提示詞內容..."
               class="w-full h-full p-4 lg:p-6 text-sm bg-transparent border-0 focus:ring-0 focus:outline-none font-mono resize-none leading-relaxed custom-scrollbar"
             ></textarea>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 下載工程對話框 -->
+    <Transition name="fade">
+      <div v-if="downloadProjectDialogOpen" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" @click.self="downloadProjectDialogOpen = false">
+        <div class="glass-panel w-full max-w-sm rounded-2xl shadow-2xl border border-line/45 p-6 flex flex-col gap-5 animate-[scale-up_0.2s_ease-out]">
+          
+          <!-- Header -->
+          <div class="flex items-center gap-3 border-b border-line/20 pb-3">
+            <div class="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
+            <div>
+              <h3 class="text-sm font-bold text-text">下載 / 導出</h3>
+              <p class="text-[10px] text-muted mt-0.5">選擇格式與打包內容</p>
+            </div>
+          </div>
+
+          <!-- Format Selection -->
+          <div class="space-y-2">
+            <p class="text-[10px] font-bold text-muted uppercase tracking-wider">導出格式</p>
+            <div class="grid grid-cols-1 gap-2">
+              <label class="flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all select-none"
+                :class="downloadProjectOptions.format === 'sillytavern' ? 'border-brand/60 bg-brand/5 ring-1 ring-brand/20' : 'border-line/30 hover:border-brand/30'"
+              >
+                <input type="radio" v-model="downloadProjectOptions.format" value="sillytavern"
+                  class="mt-0.5 text-brand focus:ring-brand cursor-pointer shrink-0" />
+                <div>
+                  <p class="text-xs font-bold text-text">酒館預設 JSON <span class="ml-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500">可直接匹入酒館</span></p>
+                  <p class="text-[10px] text-muted">導出配置組 {{ activeProfile?.characterId }} 的標準酒館預設格式</p>
+                </div>
+              </label>
+              <label class="flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all select-none"
+                :class="downloadProjectOptions.format === 'project' ? 'border-brand/60 bg-brand/5 ring-1 ring-brand/20' : 'border-line/30 hover:border-brand/30'"
+              >
+                <input type="radio" v-model="downloadProjectOptions.format" value="project"
+                  class="mt-0.5 text-brand focus:ring-brand cursor-pointer shrink-0" />
+                <div>
+                  <p class="text-xs font-bold text-text">工程檔 (.project.json)</p>
+                  <p class="text-[10px] text-muted">保留全部配置組，可再載入編輯器繼續編輯</p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Options per format -->
+          <div class="space-y-2">
+            <p class="text-[10px] font-bold text-muted uppercase tracking-wider">選項</p>
+
+            <!-- SillyTavern format options -->
+            <template v-if="downloadProjectOptions.format === 'sillytavern'">
+              <!-- Prompt mode -->
+              <div class="space-y-1.5">
+                <p class="text-[10px] text-muted">提示詞範圍</p>
+                <div class="flex gap-2">
+                  <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                    <input type="radio" v-model="downloadProjectOptions.promptMode" value="all" class="text-brand focus:ring-brand" />
+                    全部提示詞
+                  </label>
+                  <label class="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                    <input type="radio" v-model="downloadProjectOptions.promptMode" value="enabled" class="text-brand focus:ring-brand" />
+                    僅已啟用
+                  </label>
+                </div>
+              </div>
+              <!-- Regex -->
+              <label class="flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all select-none"
+                :class="downloadProjectOptions.includeRegex ? 'border-brand/50 bg-brand/5' : 'border-line/30 hover:border-brand/30'"
+                :title="selectedRegexIds.size === 0 ? '請先在「正則過濾」分頁勾選要橉出的正則' : ''"
+              >
+                <input type="checkbox" v-model="downloadProjectOptions.includeRegex"
+                  :disabled="selectedRegexIds.size === 0"
+                  class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
+                <div class="flex-1">
+                  <span class="text-xs font-semibold" :class="selectedRegexIds.size === 0 ? 'text-muted' : 'text-text'">正則過濾脚本</span>
+                  <span class="ml-2 text-[10px] text-muted">(已勾選 {{ selectedRegexIds.size }} / {{ doc?.regexScripts?.length ?? 0 }} 條)</span>
+                </div>
+              </label>
+              <!-- API -->
+              <label class="flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all select-none"
+                :class="downloadProjectOptions.includeApi ? 'border-brand/50 bg-brand/5' : 'border-line/30 hover:border-brand/30'"
+              >
+                <input type="checkbox" v-model="downloadProjectOptions.includeApi"
+                  class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
+                <div class="flex-1">
+                  <span class="text-xs font-semibold text-text">API 揁樣配置</span>
+                  <span class="ml-2 text-[10px] text-muted">({{ Object.keys(doc?.apiSettings ?? {}).length }} 項)</span>
+                </div>
+              </label>
+            </template>
+
+            <!-- Project format options -->
+            <template v-else>
+              <div class="flex items-start gap-3 p-3 rounded-xl bg-line/10 border border-line/20">
+                <div class="w-4 h-4 mt-0.5 rounded bg-brand/20 border border-brand/40 flex items-center justify-center shrink-0">
+                  <svg class="w-2.5 h-2.5 text-brand" fill="currentColor" viewBox="0 0 20 20"><path d="M16.707 5.293a1 1 0 00-1.414 0L8 12.586 4.707 9.293a1 1 0 00-1.414 1.414l4 4a1 1 0 001.414 0l8-8a1 1 0 000-1.414z"/></svg>
+                </div>
+                <div>
+                  <p class="text-xs font-semibold text-text">提示詞與全部配置組順序</p>
+                  <p class="text-[10px] text-muted">工程核心，必選</p>
+                </div>
+              </div>
+              <label class="flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all select-none"
+                :class="downloadProjectOptions.includeRegex ? 'border-brand/50 bg-brand/5' : 'border-line/30 hover:border-brand/30'"
+              >
+                <input type="checkbox" v-model="downloadProjectOptions.includeRegex"
+                  class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
+                <div class="flex-1">
+                  <span class="text-xs font-semibold text-text">正則過濾脚本</span>
+                  <span class="ml-2 text-[10px] text-muted">({{ doc?.regexScripts?.length ?? 0 }} 條)</span>
+                </div>
+              </label>
+              <label class="flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all select-none"
+                :class="downloadProjectOptions.includeApi ? 'border-brand/50 bg-brand/5' : 'border-line/30 hover:border-brand/30'"
+              >
+                <input type="checkbox" v-model="downloadProjectOptions.includeApi"
+                  class="w-3.5 h-3.5 rounded border-line text-brand focus:ring-brand cursor-pointer" />
+                <div class="flex-1">
+                  <span class="text-xs font-semibold text-text">API 揁樣配置</span>
+                  <span class="ml-2 text-[10px] text-muted">({{ Object.keys(doc?.apiSettings ?? {}).length }} 項)</span>
+                </div>
+              </label>
+            </template>
+          </div>
+
+          <!-- Actions -->
+          <div class="flex items-center justify-end gap-2 pt-1 border-t border-line/20">
+            <button @click="downloadProjectDialogOpen = false"
+              class="min-h-9 px-4 py-1.5 text-xs font-semibold rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm bg-inputBg">
+              取消
+            </button>
+            <button @click="doDownloadProjectFile"
+              class="min-h-9 px-4 py-1.5 text-xs font-semibold rounded-lg bg-brand text-white hover:bg-brand/90 transition-all shadow-sm hover:shadow-lg hover:shadow-brand/20 flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              確認下載
+            </button>
           </div>
         </div>
       </div>
