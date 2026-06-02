@@ -206,6 +206,12 @@ const suppressAutoSave = ref(false);
 const selectedProfileId = ref(null);
 const selectedPromptId = ref(null);
 const promptFilter = ref("");
+const promptManageDialogOpen = ref(false);
+const promptManageFilter = ref("");
+const promptManageSelectedIds = ref(new Set());
+const promptManageDragIndex = ref(null);
+const promptManageDropTargetIndex = ref(null);
+const promptManageToolsCollapsed = ref(false);
 
 const selectedRegexId = ref(null);
 const selectedRegexIds = ref(new Set());
@@ -271,6 +277,29 @@ const promptSearchSummary = computed(() => {
   const selectedIndex = visiblePromptEntries.value.findIndex(item => item.entry.blockId === selectedPromptId.value);
   const cursor = selectedIndex >= 0 ? selectedIndex : Math.min(promptSearchCursor.value, total - 1);
   return `${cursor + 1}/${total}`;
+});
+
+const promptManageEntries = computed(() => {
+  if (!activeProfile.value || !doc.value) return [];
+  const query = promptManageFilter.value.trim().toLowerCase();
+  const out = [];
+  for (let index = 0; index < activeProfile.value.order.length; index += 1) {
+    const entry = activeProfile.value.order[index];
+    const block = doc.value.blocks[entry.blockId];
+    const title = block?.title || entry.blockId;
+    if (query) {
+      const hay = makePromptSearchText(entry, block, title).toLowerCase();
+      if (!hay.includes(query)) continue;
+    }
+    out.push({ entry, block, index });
+  }
+  return out;
+});
+
+const promptManageSelectedCount = computed(() => promptManageSelectedIds.value.size);
+const promptManageAllVisibleSelected = computed(() => {
+  const entries = promptManageEntries.value;
+  return entries.length > 0 && entries.every(({ entry }) => promptManageSelectedIds.value.has(entry.blockId));
 });
 
 const canDragSortPrompts = computed(() => !hasPromptFilter.value && !!activeProfile.value);
@@ -1144,20 +1173,136 @@ function deleteSelectedPrompt() {
   selectedPromptId.value = activeProfile.value.order[Math.max(0, selected.index - 1)]?.blockId ?? null;
 }
 
+function openPromptManageDialog() {
+  if (!doc.value || !activeProfile.value) return;
+  promptManageFilter.value = "";
+  promptManageSelectedIds.value = new Set();
+  promptManageToolsCollapsed.value = false;
+  promptManageDialogOpen.value = true;
+}
+
+function closePromptManageDialog() {
+  promptManageDialogOpen.value = false;
+  promptManageFilter.value = "";
+  promptManageSelectedIds.value = new Set();
+  promptManageDragIndex.value = null;
+  promptManageDropTargetIndex.value = null;
+}
+
+function togglePromptManageSelection(blockId) {
+  const next = new Set(promptManageSelectedIds.value);
+  if (next.has(blockId)) next.delete(blockId);
+  else next.add(blockId);
+  promptManageSelectedIds.value = next;
+}
+
+function selectAllPromptManageVisible() {
+  const next = new Set(promptManageSelectedIds.value);
+  for (const { entry } of promptManageEntries.value) {
+    next.add(entry.blockId);
+  }
+  promptManageSelectedIds.value = next;
+}
+
+function clearPromptManageSelection() {
+  promptManageSelectedIds.value = new Set();
+}
+
+function toggleAllPromptManageVisible() {
+  if (promptManageAllVisibleSelected.value) {
+    const next = new Set(promptManageSelectedIds.value);
+    for (const { entry } of promptManageEntries.value) {
+      next.delete(entry.blockId);
+    }
+    promptManageSelectedIds.value = next;
+  } else {
+    selectAllPromptManageVisible();
+  }
+}
+
+async function deletePromptManageSelected() {
+  if (!doc.value || !activeProfile.value || promptManageSelectedIds.value.size === 0) return;
+  const selectedIds = new Set(promptManageSelectedIds.value);
+  const count = selectedIds.size;
+  const ok = await confirm(`確定要刪除選中的 ${count} 個提示詞條目嗎？\n\n此操作會從目前配置組移除它們；若該提示詞沒有被其他配置組引用，會一併刪除提示詞內容。`);
+  if (!ok) return;
+
+  const oldSelectedIndex = activeProfile.value.order.findIndex(entry => entry.blockId === selectedPromptId.value);
+  activeProfile.value.order = activeProfile.value.order.filter(entry => !selectedIds.has(entry.blockId));
+
+  for (const blockId of selectedIds) {
+    if (!isPromptReferenced(blockId)) {
+      delete doc.value.blocks[blockId];
+    }
+  }
+
+  if (!activeProfile.value.order.some(entry => entry.blockId === selectedPromptId.value)) {
+    const fallbackIndex = Math.min(Math.max(0, oldSelectedIndex), activeProfile.value.order.length - 1);
+    selectedPromptId.value = activeProfile.value.order[fallbackIndex]?.blockId ?? null;
+  }
+
+  closePromptManageDialog();
+}
+
+function canReorderPromptManage(showAlert = false) {
+  if (!activeProfile.value) return false;
+  if (promptManageFilter.value.trim()) {
+    if (showAlert) alert("管理彈窗搜尋中暫停拖曳排序，請清空搜尋後再排序，避免改到隱藏項目的真實順序。");
+    return false;
+  }
+  return true;
+}
+
+function handlePromptManageDragStart(index, event) {
+  if (!canReorderPromptManage(true)) return;
+  promptManageDragIndex.value = index;
+  promptManageDropTargetIndex.value = index;
+  if (event?.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(index));
+  }
+}
+
+function handlePromptManageDragOver(index, event) {
+  if (!canReorderPromptManage(false)) return;
+  event?.preventDefault?.();
+  promptManageDropTargetIndex.value = index;
+}
+
+function handlePromptManageDrop(targetIndex, event) {
+  event?.preventDefault?.();
+  if (!canReorderPromptManage(false)) return;
+  const sourceIndex = promptManageDragIndex.value;
+  promptManageDragIndex.value = null;
+  promptManageDropTargetIndex.value = null;
+  if (sourceIndex == null) return;
+  movePromptToDirect(sourceIndex, targetIndex);
+}
+
+function handlePromptManageDragEnd() {
+  promptManageDragIndex.value = null;
+  promptManageDropTargetIndex.value = null;
+}
+
 function movePrompt(index, direction) {
   if (!canReorderPrompts()) return;
   const targetIndex = index + direction;
   movePromptTo(index, targetIndex);
 }
 
-function movePromptTo(index, targetIndex) {
-  if (!canReorderPrompts(false)) return;
-  const order = activeProfile.value.order;
+function movePromptToDirect(index, targetIndex) {
+  const order = activeProfile.value?.order;
+  if (!Array.isArray(order)) return;
   if (index < 0 || index >= order.length) return;
   const finalIndex = Math.max(0, Math.min(targetIndex, order.length - 1));
   if (finalIndex === index) return;
   const [moved] = order.splice(index, 1);
   order.splice(finalIndex, 0, moved);
+}
+
+function movePromptTo(index, targetIndex) {
+  if (!canReorderPrompts(false)) return;
+  movePromptToDirect(index, targetIndex);
 }
 
 async function movePromptToPosition(index) {
@@ -1577,7 +1722,7 @@ onMounted(async () => {
     </div>
 
     <!-- 頂部導航欄 -->
-    <header class="glass-panel backdrop-blur-md sticky top-0 z-30 flex flex-col lg:flex-row items-center justify-between px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] bg-bg-soft/40 border-b border-line/30 shadow-sm shrink-0 gap-3 lg:gap-0">
+    <header :class="['glass-panel backdrop-blur-md sticky top-0 z-30 flex flex-col lg:flex-row items-center justify-between px-4 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] bg-bg-soft/40 border-b border-line/30 shadow-sm shrink-0 gap-3 lg:gap-0 transition-[margin] duration-200', activeTab === 'prompts' ? 'lg:ml-[340px] xl:ml-[380px]' : '']">
       <!-- Logo + Title -->
       <div class="flex items-center gap-2">
         <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-brand text-white font-bold text-base shadow-sm shadow-brand/20">
@@ -1744,7 +1889,7 @@ onMounted(async () => {
     </header>
 
     <!-- 主分頁切換標籤 -->
-    <nav class="flex border-b border-line/20 bg-white/10 dark:bg-black/10 backdrop-blur-sm shrink-0 px-4 pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] z-10 relative overflow-x-auto">
+    <nav :class="['flex border-b border-line/20 bg-white/10 dark:bg-black/10 backdrop-blur-sm shrink-0 px-4 pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))] z-10 relative overflow-x-auto transition-[margin] duration-200', activeTab === 'prompts' ? 'lg:ml-[340px] xl:ml-[380px]' : '']">
       <button 
         @click="activeTab = 'prompts'" 
         :class="['px-5 py-3.5 text-sm font-bold border-b-2 transition-all duration-200 flex items-center gap-2', activeTab === 'prompts' ? 'border-brand text-brand bg-brand/5 shadow-[inset_0_-2px_0_0_var(--brand)]' : 'border-transparent text-muted hover:text-text hover:bg-white/20 dark:hover:bg-white/5']"
@@ -1766,7 +1911,7 @@ onMounted(async () => {
     </nav>
 
     <!-- 主內容區域 -->
-    <main class="flex-1 min-height-0 overflow-hidden relative z-10 p-1.5 lg:p-3 pb-[calc(0.375rem+env(safe-area-inset-bottom))] lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))] pl-[calc(0.375rem+env(safe-area-inset-left))] lg:pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.375rem+env(safe-area-inset-right))] lg:pr-[calc(0.75rem+env(safe-area-inset-right))]">
+    <main :class="['flex-1 min-height-0 overflow-hidden relative z-10 p-1.5 lg:p-3 pb-[calc(0.375rem+env(safe-area-inset-bottom))] lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))] pl-[calc(0.375rem+env(safe-area-inset-left))] lg:pl-[calc(0.75rem+env(safe-area-inset-left))] pr-[calc(0.375rem+env(safe-area-inset-right))] lg:pr-[calc(0.75rem+env(safe-area-inset-right))] transition-[margin] duration-200', activeTab === 'prompts' ? 'lg:ml-[340px] xl:ml-[380px]' : '']">
       
       <!-- 1. 提示詞預設分頁 -->
       <section
@@ -1800,7 +1945,7 @@ onMounted(async () => {
         </div>
 
         <!-- 提示詞佈局容器 -->
-        <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 h-full min-h-0 gap-1.5 lg:gap-3 overflow-hidden">
+        <div class="flex-1 grid grid-cols-1 lg:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)] h-full min-h-0 gap-1.5 lg:gap-3 overflow-hidden">
           
           <!-- 1.1 提示詞列表面板 (lg:col-span-3) -->
           <Teleport to="body" :disabled="!isMobile">
@@ -1813,7 +1958,7 @@ onMounted(async () => {
               v-show="mobilePromptDrawerOpen || !isMobile"
               :class="[
                 'glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden',
-                isMobile ? 'fixed inset-y-0 left-0 z-50 w-80 max-w-[86vw] shadow-2xl transition-transform duration-200 border-r border-line/20' : 'lg:col-span-3',
+                isMobile ? 'fixed inset-y-0 left-0 z-50 w-80 max-w-[86vw] shadow-2xl transition-transform duration-200 border-r border-line/20' : 'lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:w-[340px] xl:w-[380px] lg:rounded-none lg:shadow-none lg:border-r lg:border-line/30 lg:bg-bg-soft/95 lg:backdrop-blur-md',
                 isMobile && !mobilePromptDrawerOpen ? '-translate-x-full' : 'translate-x-0'
               ]"
             >
@@ -1875,7 +2020,7 @@ onMounted(async () => {
               <div v-if="hasPromptFilter" class="text-[10px] text-muted leading-tight">
                 搜尋中暫停排序，請清空搜尋後再排序以避免影響其他項目。
               </div>
-              <div class="grid grid-cols-3 gap-1.5">
+              <div class="grid grid-cols-4 gap-1.5">
                 <button @click="addPrompt" class="min-h-10 py-1 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all flex items-center justify-center gap-1 shadow-sm">
                   <svg class="w-3.5 h-3.5"><use href="#icon-plus-circle" /></svg> 新增
                 </button>
@@ -1884,6 +2029,9 @@ onMounted(async () => {
                 </button>
                 <button @click="deleteSelectedPrompt" :disabled="!selectedPromptId" class="min-h-10 py-1 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-red-500 hover:text-red-500 disabled:opacity-50 transition-all flex items-center justify-center gap-1 shadow-sm">
                   <svg class="w-3.5 h-3.5"><use href="#icon-trash" /></svg> 刪除
+                </button>
+                <button @click="openPromptManageDialog" :disabled="!activeProfile?.order?.length" class="min-h-10 py-1 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand disabled:opacity-50 transition-all flex items-center justify-center gap-1 shadow-sm">
+                  <svg class="w-3.5 h-3.5"><use href="#icon-clipboard" /></svg> 管理
                 </button>
               </div>
             </div>
@@ -1908,7 +2056,7 @@ onMounted(async () => {
                 @touchmove="handlePromptTouchDragMove"
                 @touchend="handlePromptTouchDragEnd"
                 @touchcancel="handlePromptTouchDragEnd"
-                :class="['group flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all duration-200 relative select-none', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98] opacity-70' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-transparent hover:bg-line/20']"
+                :class="['group flex items-start gap-3 p-3 lg:p-3.5 rounded-xl border cursor-pointer transition-all duration-200 relative select-none', promptDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.98] opacity-70' : entry.blockId === selectedPromptId ? 'border-brand bg-brand/5 shadow-sm ring-1 ring-brand/20' : 'border-transparent hover:bg-line/20']"
               >
                 <!-- Selected Indicator Line -->
                 <div v-if="entry.blockId === selectedPromptId" class="absolute left-0 top-0 bottom-0 w-1 bg-brand"></div>
@@ -1923,11 +2071,11 @@ onMounted(async () => {
                 
                 <!-- 標題與元數據 -->
                 <div class="flex-1 min-w-0">
-                  <div class="text-xs font-bold truncate text-text" :class="entry.enabled ? '' : 'text-muted line-through opacity-60'">
+                  <div class="text-xs lg:text-[13px] font-bold truncate text-text" :class="entry.enabled ? '' : 'text-muted line-through opacity-60'">
                     {{ block?.title || `${entry.blockId} (缺失定義)` }}
                   </div>
-                  <div class="flex flex-wrap gap-1 mt-1.5">
-                    <span class="text-[9px] px-1.5 py-0.5 rounded bg-line/30 text-muted font-mono leading-none">{{ entry.blockId }}</span>
+                  <div class="flex flex-wrap gap-1.5 mt-1.5">
+                    <span class="text-[9px] lg:text-[10px] px-1.5 py-0.5 rounded bg-line/30 text-muted font-mono leading-none truncate max-w-full">{{ entry.blockId }}</span>
                     <span v-if="block?.role" :class="['text-[9px] px-1.5 py-0.5 rounded font-medium leading-none', block.role === 'system' ? 'bg-brand/10 text-brand' : block.role === 'user' ? 'bg-blue-500/10 text-blue-500' : block.role === 'assistant' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-purple-500/10 text-purple-500']">
                       {{ formatPromptRole(block.role) }}
                     </span>
@@ -1944,7 +2092,7 @@ onMounted(async () => {
                 ></div>
 
                 <!-- 排序操作 -->
-                <div class="grid grid-cols-2 gap-1 shrink-0 relative">
+                <div class="grid grid-cols-2 gap-1 shrink-0 relative transition-opacity duration-150 lg:opacity-25 group-hover:lg:opacity-100 group-focus-within:lg:opacity-100">
                   <button
                     @click.stopPropagation="movePromptTo(index, 0)"
                     :disabled="index === 0 || hasPromptFilter"
@@ -2014,7 +2162,7 @@ onMounted(async () => {
           <!-- 1.2 提示詞編輯器面板 (lg:col-span-5) -->
           <section 
             v-show="mobileSubTab !== 'preview' || !isMobile"
-            class="lg:col-span-5 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden"
+            class="lg:col-span-1 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden"
           >
             <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 flex items-center justify-between gap-2">
               <div class="flex items-center gap-2">
@@ -2122,7 +2270,7 @@ onMounted(async () => {
           <!-- 1.3 導出預覽面板 (lg:col-span-4) -->
           <section 
             v-show="mobileSubTab === 'preview' || !isMobile" 
-            class="lg:col-span-4 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden"
+            class="lg:col-span-1 glass-panel rounded-2xl shadow-sm flex flex-col h-full min-h-0 overflow-hidden"
           >
             <div class="p-3 border-b border-line/20 bg-bg-soft/40 shrink-0 flex items-center justify-between">
               <h2 class="text-xs font-bold text-brand flex items-center gap-1.5">
@@ -2731,6 +2879,129 @@ onMounted(async () => {
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               確認下載
             </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 提示詞條目管理 / 批量刪除彈窗 -->
+    <Transition name="fade">
+      <div v-if="promptManageDialogOpen" class="fixed inset-0 z-[55] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] pl-[calc(1rem+env(safe-area-inset-left))] pr-[calc(1rem+env(safe-area-inset-right))]" @click.self="closePromptManageDialog">
+        <div class="glass-panel w-full max-w-3xl h-[min(760px,86dvh)] rounded-2xl shadow-2xl overflow-hidden border border-line/45 flex flex-col animate-[scale-up_0.2s_ease-out]">
+          <div class="p-4 border-b border-line/20 bg-bg-soft/60 shrink-0 flex items-center justify-between gap-3">
+            <div class="min-w-0">
+              <h3 class="text-sm font-bold text-brand flex items-center gap-2">
+                <svg class="w-4 h-4"><use href="#icon-clipboard" /></svg>
+                所有提示詞條目
+              </h3>
+              <p class="text-[10px] text-muted mt-1 truncate">
+                目前配置組：{{ activeProfile?.characterId ?? '未選擇' }}，已選 {{ promptManageSelectedCount }} / {{ activeProfile?.order?.length ?? 0 }} 個
+              </p>
+            </div>
+            <button @click="closePromptManageDialog" class="min-h-9 px-3 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand transition-all shrink-0">
+              關閉
+            </button>
+          </div>
+
+          <div class="p-3 border-b border-line/20 shrink-0 space-y-2 bg-bg-soft/20">
+            <div class="flex items-center justify-between gap-2">
+              <button
+                @click="promptManageToolsCollapsed = !promptManageToolsCollapsed"
+                class="min-h-9 px-3 text-xs font-bold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand transition-all flex items-center gap-2"
+                :title="promptManageToolsCollapsed ? '展開工具區' : '收起工具區'"
+              >
+                <svg class="w-3.5 h-3.5 transition-transform" :class="promptManageToolsCollapsed ? '-rotate-90' : ''"><use href="#icon-chevron-down" /></svg>
+                篩選與批量操作
+              </button>
+              <span class="text-[11px] font-bold text-muted">顯示 {{ promptManageEntries.length }} 個條目</span>
+            </div>
+            <div v-show="!promptManageToolsCollapsed" class="space-y-2">
+              <div class="relative">
+                <input
+                  v-model="promptManageFilter"
+                  type="text"
+                  placeholder="搜尋標題 / ID / 角色 / 內文 / tag..."
+                  class="w-full min-h-10 pl-8 pr-3 py-2 text-xs rounded-lg border border-line/60 bg-inputBg focus:outline-none focus:border-brand"
+                />
+                <svg class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted/60"><use href="#icon-magnifying-glass" /></svg>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <button @click="toggleAllPromptManageVisible" :disabled="promptManageEntries.length === 0" class="min-h-9 px-3 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand disabled:opacity-50 transition-all">
+                  {{ promptManageAllVisibleSelected ? '取消目前篩選' : '全選目前篩選' }}
+                </button>
+                <button @click="clearPromptManageSelection" :disabled="promptManageSelectedCount === 0" class="min-h-9 px-3 text-xs font-semibold rounded-lg border border-line/50 bg-inputBg hover:border-brand hover:text-brand disabled:opacity-50 transition-all">
+                  清空選取
+                </button>
+                <span class="ml-auto text-[10px] text-muted leading-tight">
+                  可直接拖曳條目快速排序；搜尋中會暫停拖曳排序。
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1 bg-bg/40">
+            <div v-if="promptManageEntries.length === 0" class="h-full flex items-center justify-center text-xs text-muted">
+              沒有匹配的提示詞條目
+            </div>
+            <label
+              v-for="{ entry, block, index } in promptManageEntries"
+              :key="entry.blockId"
+              :draggable="!promptManageFilter.trim()"
+              @dragstart="handlePromptManageDragStart(index, $event)"
+              @dragover="handlePromptManageDragOver(index, $event)"
+              @drop="handlePromptManageDrop(index, $event)"
+              @dragend="handlePromptManageDragEnd"
+              class="flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-all select-none relative"
+              :class="[
+                promptManageDragIndex === index ? 'border-brand bg-brand/10 shadow-md scale-[0.99] opacity-70' : promptManageSelectedIds.has(entry.blockId) ? 'border-brand bg-brand/5 ring-1 ring-brand/20' : 'border-line/30 hover:border-brand/40 hover:bg-line/15',
+                promptManageFilter.trim() ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+              ]"
+            >
+              <input
+                type="checkbox"
+                :checked="promptManageSelectedIds.has(entry.blockId)"
+                @change="togglePromptManageSelection(entry.blockId)"
+                class="mt-0.5 w-4 h-4 rounded border-line text-brand focus:ring-brand cursor-pointer shrink-0"
+              />
+              <span class="w-8 text-right text-[10px] text-muted font-mono shrink-0 pt-0.5">{{ index + 1 }}</span>
+              <span class="mt-0.5 text-muted/70 shrink-0" :title="promptManageFilter.trim() ? '清空搜尋後可拖曳排序' : '拖曳排序'">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+              </span>
+              <span class="min-w-0 flex-1">
+                <span class="block text-xs font-bold truncate" :class="entry.enabled ? 'text-text' : 'text-muted line-through opacity-60'">
+                  {{ block?.title || `${entry.blockId} (缺失定義)` }}
+                </span>
+                <span class="mt-1 flex flex-wrap gap-1.5">
+                  <span class="text-[9px] px-1.5 py-0.5 rounded bg-line/30 text-muted font-mono leading-none truncate max-w-[220px]">{{ entry.blockId }}</span>
+                  <span v-if="block?.role" :class="['text-[9px] px-1.5 py-0.5 rounded font-medium leading-none', block.role === 'system' ? 'bg-brand/10 text-brand' : block.role === 'user' ? 'bg-blue-500/10 text-blue-500' : block.role === 'assistant' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-purple-500/10 text-purple-500']">
+                    {{ formatPromptRole(block.role) }}
+                  </span>
+                  <span v-if="block?.marker" class="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-medium leading-none">標記塊</span>
+                  <span :class="['text-[9px] px-1.5 py-0.5 rounded font-medium leading-none', entry.enabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-line/40 text-muted']">
+                    {{ entry.enabled ? '啟用' : '停用' }}
+                  </span>
+                </span>
+              </span>
+              <div
+                v-if="promptManageDragIndex !== null && promptManageDropTargetIndex === index"
+                class="absolute bottom-0 left-0 right-0 h-0.5 bg-brand shadow-[0_0_6px_2px_rgba(176,86,45,0.5)] z-20 pointer-events-none"
+              ></div>
+            </label>
+          </div>
+
+          <div class="p-3 border-t border-line/20 bg-bg-soft/60 shrink-0 flex items-center justify-between gap-3">
+            <p class="text-[10px] text-muted leading-relaxed">
+              刪除會從目前配置組移除條目；若提示詞未被其他配置組引用，會一併刪除內容。
+            </p>
+            <div class="flex items-center gap-2 shrink-0">
+              <button @click="closePromptManageDialog" class="min-h-9 px-4 py-1.5 text-xs font-semibold rounded-lg glass-card hover:text-brand hover:border-brand/40 transition-all shadow-sm bg-inputBg">
+                取消
+              </button>
+              <button @click="deletePromptManageSelected" :disabled="promptManageSelectedCount === 0" class="min-h-9 px-4 py-1.5 text-xs font-semibold rounded-lg bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-sm flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5"><use href="#icon-trash" /></svg>
+                刪除選中 {{ promptManageSelectedCount }} 個
+              </button>
+            </div>
           </div>
         </div>
       </div>
